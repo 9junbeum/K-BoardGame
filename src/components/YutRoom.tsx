@@ -8,6 +8,7 @@ import {
   applyThrow,
   applyYutMove,
   canApplyResult,
+  computeDestination,
   createYutState,
   DEFAULT_YUT_RULES,
   isTurnOver,
@@ -44,7 +45,7 @@ export default function YutRoom({ roomId }: { roomId: string }) {
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [selected, setSelected] = useState<YutResult | null>(null);
+  const [selectedTarget, setSelectedTarget] = useState<number | "new" | null>(null);
   const savedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -208,9 +209,10 @@ export default function YutRoom({ roomId }: { roomId: string }) {
     await commit(resolveTurn(st));
   }, [myTurn, state, rules, myId, commit, resolveTurn]);
 
-  const applyTo = useCallback(
-    async (target: number | "new") => {
-      if (!myTurn || !state || !selected) return;
+  const applyMoveTo = useCallback(
+    async (target: number | "new", result: YutResult) => {
+      if (!myTurn || !state) return;
+      setSelectedTarget(null);
       let t: number | "new" = target;
       if (typeof target === "number") {
         const idx = (state.pieces[myId] ?? []).findIndex(
@@ -219,9 +221,8 @@ export default function YutRoom({ roomId }: { roomId: string }) {
         if (idx === -1) return;
         t = idx;
       }
-      const r = applyYutMove(state, myId, t, selected);
+      const r = applyYutMove(state, myId, t, result);
       if (!r) return;
-      setSelected(null);
       if (r.won) {
         await commit({
           state: r.state,
@@ -234,28 +235,43 @@ export default function YutRoom({ roomId }: { roomId: string }) {
       }
       await commit(resolveTurn(r.state));
     },
-    [myTurn, state, selected, myId, commit, resolveTurn],
+    [myTurn, state, myId, commit, resolveTurn],
   );
 
-  // 자동 선택/해제는 마이크로태스크로 (effect 내 동기 setState 회피)
-  useEffect(() => {
-    if (!myTurn || !state) return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      if (selected && !state.pending.includes(selected)) {
-        setSelected(null);
+  /** 이 대상(판 위 노드 또는 새 말)에 적용 가능한 결과들 (중복 제거) */
+  const applicableResultsFor = useCallback(
+    (target: number | "new"): YutResult[] => {
+      if (!state) return [];
+      const mine = state.pieces[myId] ?? [];
+      const set = new Set<YutResult>();
+      for (const r of state.pending) {
+        const steps = RESULT_STEPS[r];
+        if (target === "new") {
+          if (steps > 0 && mine.some((p) => p.pos === "ready")) set.add(r);
+        } else {
+          const piece = mine.find((p) => typeof p.pos === "number" && p.pos === target);
+          if (piece && computeDestination(piece, steps) !== null) set.add(r);
+        }
+      }
+      return [...set];
+    },
+    [state, myId],
+  );
+
+  /** 말 클릭: 결과가 하나뿐이면 즉시 이동, 여러 개면 선택지 표시 */
+  const selectTarget = useCallback(
+    (target: number | "new") => {
+      if (!myTurn) return;
+      const results = applicableResultsFor(target);
+      if (results.length === 0) return;
+      if (results.length === 1) {
+        void applyMoveTo(target, results[0]);
         return;
       }
-      if (selected === null && state.throwsLeft <= 0) {
-        const usable = state.pending.find((r) => canApplyResult(state, myId, r));
-        if (usable) setSelected(usable);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [myTurn, state, selected, myId]);
+      setSelectedTarget(target);
+    },
+    [myTurn, applicableResultsFor, applyMoveTo],
+  );
 
   // 종료 시 기록 저장
   useEffect(() => {
@@ -321,17 +337,15 @@ export default function YutRoom({ roomId }: { roomId: string }) {
   }
 
   const myPieces = state?.pieces[myId] ?? [];
-  const steps = selected ? RESULT_STEPS[selected] : 0;
-  const canEnterNew =
-    myTurn && selected !== null && steps > 0 && myPieces.some((p) => p.pos === "ready");
   const selectableNodes = new Set<number>();
-  if (myTurn && state && selected) {
+  if (myTurn && state && state.pending.length > 0) {
     for (const p of myPieces) {
       if (typeof p.pos !== "number") continue;
-      const d = RESULT_STEPS[selected] === -1 ? p.trail.length > 1 : true;
-      if (d) selectableNodes.add(p.pos);
+      if (applicableResultsFor(p.pos).length > 0) selectableNodes.add(p.pos);
     }
   }
+  const newPieceResults = myTurn && state ? applicableResultsFor("new") : [];
+  const targetResults = selectedTarget !== null ? applicableResultsFor(selectedTarget) : [];
   const winnerPlayer = players.find((p) => p.player_id === room.winner) ?? null;
   const turnPlayer = players.find((p) => p.player_id === room.current_turn) ?? null;
 
@@ -436,7 +450,8 @@ export default function YutRoom({ roomId }: { roomId: string }) {
             pieces={state?.pieces ?? {}}
             order={state?.order ?? []}
             selectableNodes={selectableNodes}
-            onNodeClick={(node) => applyTo(node)}
+            selectedNode={typeof selectedTarget === "number" ? selectedTarget : null}
+            onNodeClick={(node) => selectTarget(node)}
           />
 
           <div className="mt-4 w-full">
@@ -463,43 +478,55 @@ export default function YutRoom({ roomId }: { roomId: string }) {
 
                     {state.pending.length > 0 && (
                       <div className="mt-3">
-                        <p className="font-plex text-[11px] text-mud">
-                          적용할 결과를 고른 뒤, 움직일 말(또는 새 말)을 선택하세요
-                        </p>
-                        <div className="mt-2 flex flex-wrap justify-center gap-2">
+                        <div className="flex flex-wrap items-center justify-center gap-1.5">
+                          <span className="font-plex text-[11px] text-mud">남은 결과</span>
                           {state.pending.map((r, i) => (
-                            <button
+                            <span
                               key={`${r}-${i}`}
-                              onClick={() => setSelected(r)}
-                              disabled={!canApplyResult(state, myId, r)}
-                              className={`rounded-full border px-4 py-1.5 text-sm transition ${
-                                selected === r
-                                  ? "border-vermil bg-vermil text-paper"
-                                  : "border-mud/40 text-ink-soft hover:border-ink disabled:opacity-40"
-                              }`}
+                              className="rounded-full border border-mud/40 px-3 py-1 text-sm text-ink-soft"
                             >
                               {YUT_RESULT_LABEL[r]}
                               <span className="ml-1 font-plex text-[10px] opacity-70">
                                 {RESULT_STEPS[r] > 0 ? `+${RESULT_STEPS[r]}` : "-1"}
                               </span>
-                            </button>
+                            </span>
                           ))}
                         </div>
-                        {selected && (
-                          <div className="mt-2 flex justify-center gap-2">
-                            {canEnterNew && (
+
+                        {selectedTarget === null && (
+                          <p className="mt-2 font-plex text-[11px] text-mud">
+                            판 위의 점선 표시된 말을 클릭하거나, 오른쪽 내 대기 말을 눌러
+                            새 말을 투입하세요
+                          </p>
+                        )}
+
+                        {selectedTarget !== null && targetResults.length > 0 && (
+                          <div className="banner-in mt-3 rounded-lg border border-vermil/50 bg-paper px-4 py-3">
+                            <p className="text-sm font-semibold">
+                              {selectedTarget === "new"
+                                ? "새 말을 어떤 결과로 투입할까요?"
+                                : "이 말을 어떤 결과로 움직일까요?"}
+                            </p>
+                            <div className="mt-2 flex flex-wrap justify-center gap-2">
+                              {targetResults.map((r) => (
+                                <button
+                                  key={r}
+                                  onClick={() => applyMoveTo(selectedTarget, r)}
+                                  className="rounded-full border border-vermil bg-paper-deep px-5 py-2 text-base font-semibold text-vermil transition hover:bg-vermil hover:text-paper"
+                                >
+                                  {YUT_RESULT_LABEL[r]}
+                                  <span className="ml-1 font-plex text-[11px] opacity-70">
+                                    {RESULT_STEPS[r] > 0 ? `+${RESULT_STEPS[r]}칸` : "뒤로 1칸"}
+                                  </span>
+                                </button>
+                              ))}
                               <button
-                                onClick={() => applyTo("new")}
-                                className="rounded border border-vermil/60 px-4 py-1.5 font-plex text-xs text-vermil transition hover:bg-vermil hover:text-paper"
+                                onClick={() => setSelectedTarget(null)}
+                                className="rounded-full border border-mud/40 px-4 py-2 text-sm text-ink-soft transition hover:border-ink"
                               >
-                                새 말 투입
+                                취소
                               </button>
-                            )}
-                            {selectableNodes.size > 0 && (
-                              <span className="self-center font-plex text-[10px] text-mud">
-                                판 위의 점선 표시된 말을 클릭
-                              </span>
-                            )}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -563,22 +590,45 @@ export default function YutRoom({ roomId }: { roomId: string }) {
                   </div>
                   {p && state && (
                     <>
-                      <div className="mt-1.5 flex items-center gap-1.5">
-                        {pcs.map((pc, pi) => (
-                          <span
-                            key={pi}
-                            title={pc.pos === "done" ? "완주" : pc.pos === "ready" ? "대기" : "판 위"}
-                            className="inline-block h-3.5 w-3.5 rounded-full border"
-                            style={{
-                              borderColor: PLAYER_COLORS[i],
-                              backgroundColor:
-                                pc.pos === "ready" ? "transparent" : PLAYER_COLORS[i],
-                              opacity: pc.pos === "done" ? 0.35 : 1,
-                            }}
-                          />
-                        ))}
+                      <div className="mt-2 flex items-center gap-2">
+                        {pcs.map((pc, pi) => {
+                          const mine = p.player_id === myId;
+                          const clickable =
+                            mine && pc.pos === "ready" && newPieceResults.length > 0;
+                          return (
+                            <span
+                              key={pi}
+                              onClick={clickable ? () => selectTarget("new") : undefined}
+                              title={
+                                pc.pos === "done"
+                                  ? "완주"
+                                  : pc.pos === "ready"
+                                    ? clickable
+                                      ? "클릭해서 새 말 투입"
+                                      : "대기"
+                                    : "판 위"
+                              }
+                              className={`inline-block rounded-full border-2 transition ${
+                                mine ? "h-6 w-6" : "h-4 w-4"
+                              } ${
+                                clickable
+                                  ? "cursor-pointer hover:scale-110" +
+                                    (selectedTarget === "new"
+                                      ? " ring-2 ring-vermil"
+                                      : " ring-2 ring-vermil/40")
+                                  : ""
+                              }`}
+                              style={{
+                                borderColor: PLAYER_COLORS[i],
+                                backgroundColor:
+                                  pc.pos === "ready" ? "transparent" : PLAYER_COLORS[i],
+                                opacity: pc.pos === "done" ? 0.35 : 1,
+                              }}
+                            />
+                          );
+                        })}
                       </div>
-                      <p className="mt-1 font-plex text-[10px] text-mud">
+                      <p className="mt-1.5 font-plex text-[10px] text-mud">
                         대기 {ready} · 판 위 {rules.pieceCount - ready - done} · 완주 {done}/
                         {rules.pieceCount}
                       </p>
@@ -589,7 +639,7 @@ export default function YutRoom({ roomId }: { roomId: string }) {
             })}
           </div>
           <p className="mt-2 hidden font-plex text-[10px] text-mud lg:block">
-            ○ 대기 · ● 판 위 · 흐림 완주
+            ○ 대기 · ● 판 위 · 흐림 완주 — 내 차례엔 대기 말을 클릭해 새 말 투입
           </p>
         </aside>
       </div>

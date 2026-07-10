@@ -96,10 +96,18 @@ interface YutBoardProps {
   order: string[];
   /** 클릭 가능한 노드 */
   selectableNodes?: Set<number>;
+  /** 현재 선택된 노드 (결과 선택 대기 중) */
+  selectedNode?: number | null;
   onNodeClick?: (node: number) => void;
 }
 
-export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }: YutBoardProps) {
+export default function YutBoard({
+  pieces,
+  order,
+  selectableNodes,
+  selectedNode,
+  onNodeClick,
+}: YutBoardProps) {
   const edges: [number, number][] = [];
   for (let i = 0; i < 19; i++) edges.push([i, i + 1]);
   edges.push([19, 0]);
@@ -166,11 +174,17 @@ export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }
                 fill="none" stroke="#8a7a5f" strokeWidth="1.2"
               />
             )}
-            {selectable && (
+            {selectable && selectedNode !== node && (
               <circle
                 cx={px(c.x)} cy={px(c.y)} r={big ? 27 : 21}
                 fill="none" stroke="var(--color-vermil)" strokeWidth="2.5"
                 strokeDasharray="5 4"
+              />
+            )}
+            {selectedNode === node && (
+              <circle
+                cx={px(c.x)} cy={px(c.y)} r={big ? 27 : 21}
+                fill="none" stroke="var(--color-vermil)" strokeWidth="3.5"
               />
             )}
           </g>
