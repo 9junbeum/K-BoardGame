@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #f4ede0;
+  --color-paper-deep: #ece2cf;
+  --color-ink: #1a1614;
+  --color-ink-soft: #3d3630;
+  --color-vermil: #8b2a1f;
+  --color-mud: #7a6f5c;
+  --color-board-hi: #e9d9b4;
+  --color-board-lo: #dcc691;
+  --font-serif-kr: "Noto Serif KR", ui-serif, serif;
+  --font-plex: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+body {
+  background-color: var(--color-paper);
+  background-image:
+    radial-gradient(ellipse at 20% 0%, rgba(255, 252, 244, 0.7), transparent 55%),
+    radial-gradient(ellipse at 85% 100%, rgba(122, 111, 92, 0.08), transparent 50%);
+  color: var(--color-ink);
+  font-family: var(--font-serif-kr);
+  min-height: 100vh;
+}
+
+/* 돌 놓는 애니메이션 */
+@keyframes stone-pop {
+  0% {
+    transform: scale(0.35);
+    opacity: 0.3;
+  }
+  70% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.stone-pop {
+  animation: stone-pop 0.22s ease-out;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes banner-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.banner-in {
+  animation: banner-in 0.3s ease-out;
+}

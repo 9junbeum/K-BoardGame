@@ -1,0 +1,390 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import Board from "@/components/Board";
+import NicknameModal from "@/components/NicknameModal";
+import {
+  applyMove,
+  boardFromMoves,
+  checkWin,
+  nextColor,
+  type StoneColor,
+} from "@/games/omok/logic";
+import { saveLocalRecord, saveServerRecord } from "@/lib/history";
+import { getPlayerId, getStoredNickname, storeNickname } from "@/lib/player";
+import { getSupabase, type PlayerRow, type RoomRow } from "@/lib/supabase";
+
+const COLOR_LABEL = { b: "흑", w: "백" } as const;
+
+export default function RoomPage() {
+  const { roomId } = useParams<{ roomId: string }>();
+  const supabase = useMemo(() => getSupabase(), []);
+
+  const [myId, setMyId] = useState("");
+  const [room, setRoom] = useState<RoomRow | null>(null);
+  const [players, setPlayers] = useState<PlayerRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const savedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setMyId(getPlayerId());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const fetchPlayers = useCallback(async () => {
+    if (!supabase) return;
+    const { data } = await supabase
+      .from("game_players")
+      .select("*")
+      .eq("room_id", roomId)
+      .order("joined_at", { ascending: true });
+    if (data) setPlayers(data as PlayerRow[]);
+  }, [supabase, roomId]);
+
+  // 초기 로드 + Realtime 구독
+  useEffect(() => {
+    if (!supabase || !roomId) return;
+    let cancelled = false;
+
+    (async () => {
+      const { data } = await supabase
+        .from("game_rooms")
+        .select("*")
+        .eq("id", roomId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (!data) {
+        setNotFound(true);
+      } else {
+        setRoom(data as RoomRow);
+        await fetchPlayers();
+      }
+      setLoaded(true);
+    })();
+
+    const channel = supabase
+      .channel(`room:${roomId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "game_rooms", filter: `id=eq.${roomId}` },
+        (payload) => setRoom(payload.new as RoomRow),
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "game_players", filter: `room_id=eq.${roomId}` },
+        () => fetchPlayers(),
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, roomId, fetchPlayers]);
+
+  const me = players.find((p) => p.player_id === myId) ?? null;
+  const opponent = players.find((p) => p.player_id !== myId) ?? null;
+  const isSpectator = loaded && !me && players.length >= 2;
+  const needJoin = loaded && Boolean(room) && myId !== "" && !me && players.length < 2;
+
+  // 방 참가
+  const join = useCallback(
+    async (nickname: string) => {
+      if (!supabase || !room) return;
+      storeNickname(nickname);
+      const color: StoneColor = players.length === 0 ? "b" : "w";
+      const { error } = await supabase.from("game_players").insert({
+        room_id: roomId,
+        player_id: myId,
+        nickname,
+        color,
+      });
+      if (error) {
+        await fetchPlayers();
+        return;
+      }
+      // 두 번째 참가자가 게임을 시작 상태로 전환
+      if (players.length === 1) {
+        const black = players[0].color === "b" ? players[0].player_id : myId;
+        await supabase
+          .from("game_rooms")
+          .update({ status: "playing", current_turn: black })
+          .eq("id", roomId)
+          .eq("status", "waiting");
+      }
+      await fetchPlayers();
+    },
+    [supabase, room, players, roomId, myId, fetchPlayers],
+  );
+
+  // 착수
+  const place = useCallback(
+    async (x: number, y: number) => {
+      if (!supabase || !room || !me || room.status !== "playing") return;
+      if (room.current_turn !== myId) return;
+      if (me.color !== nextColor(room.state.moves)) return;
+
+      const r = applyMove(room.state, x, y);
+      if (!r) return;
+
+      const finished = Boolean(r.win) || r.draw;
+      const update = {
+        state: r.state,
+        current_turn: finished ? null : opponent?.player_id ?? null,
+        ...(finished && {
+          status: "finished" as const,
+          winner: r.draw ? "draw" : myId,
+          finished_at: new Date().toISOString(),
+        }),
+      };
+
+      // 낙관적 반영
+      setRoom((prev) => (prev ? { ...prev, ...update } : prev));
+
+      const { data, error } = await supabase
+        .from("game_rooms")
+        .update(update)
+        .eq("id", roomId)
+        .eq("current_turn", myId) // 최소한의 턴 검증
+        .select("id");
+
+      if (error || !data || data.length === 0) {
+        // 실패 시 서버 상태로 복구
+        const { data: fresh } = await supabase
+          .from("game_rooms")
+          .select("*")
+          .eq("id", roomId)
+          .maybeSingle();
+        if (fresh) setRoom(fresh as RoomRow);
+      }
+    },
+    [supabase, room, me, opponent, myId, roomId],
+  );
+
+  // 종료 시 기록 저장 (플레이어만, 1회)
+  useEffect(() => {
+    if (!room || room.status !== "finished" || !me || savedRef.current) return;
+    if (room.state.moves.length === 0) return;
+    savedRef.current = true;
+
+    const record = {
+      roomId: room.id,
+      gameType: "omok" as const,
+      result:
+        room.winner === "draw" ? ("draw" as const)
+        : room.winner === myId ? ("win" as const)
+        : ("lose" as const),
+      opponentNickname: opponent?.nickname ?? "?",
+      moves: room.state.moves,
+    };
+
+    (async () => {
+      const { data } = (await supabase?.auth.getSession()) ?? { data: { session: null } };
+      const session = data.session;
+      if (session && supabase) {
+        try {
+          await saveServerRecord(supabase, session.user.id, record);
+          return;
+        } catch {
+          // 서버 저장 실패 시 로컬로
+        }
+      }
+      saveLocalRecord(record);
+    })();
+  }, [room, me, opponent, myId, supabase]);
+
+  const copyLink = useCallback(() => {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, []);
+
+  // ---------- 렌더링 ----------
+
+  if (!supabase) {
+    return (
+      <Shell>
+        <p className="mt-20 text-center text-ink-soft">
+          실시간 대전을 하려면 Supabase 설정이 필요합니다.
+        </p>
+        <p className="mt-2 text-center font-plex text-xs text-mud">
+          .env.local 에 NEXT_PUBLIC_SUPABASE_URL / ANON_KEY를 넣고 재시작하세요.
+        </p>
+        <div className="mt-6 text-center">
+          <Link href="/room/local" className="text-vermil underline underline-offset-4">
+            같은 화면 대국으로 이동
+          </Link>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (loaded && notFound) {
+    return (
+      <Shell>
+        <p className="mt-20 text-center text-ink-soft">방을 찾을 수 없습니다.</p>
+        <div className="mt-4 text-center">
+          <Link href="/" className="text-vermil underline underline-offset-4">
+            로비로 돌아가기
+          </Link>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (!loaded || !room) {
+    return (
+      <Shell>
+        <p className="mt-20 text-center font-plex text-sm text-mud">불러오는 중…</p>
+      </Shell>
+    );
+  }
+
+  const board = boardFromMoves(room.state.moves);
+  const lastMove = room.state.moves.at(-1) ?? null;
+  const finished = room.status === "finished";
+  const myTurn = room.status === "playing" && room.current_turn === myId;
+  const winnerPlayer = players.find((p) => p.player_id === room.winner) ?? null;
+
+  // 승리 라인 재계산 (마지막 착수 기준)
+  const winLine =
+    finished && room.winner !== "draw" && lastMove
+      ? (checkWin(board, lastMove.x, lastMove.y)?.line ?? null)
+      : null;
+
+  return (
+    <Shell>
+      <header className="mb-4 flex w-full items-center justify-between">
+        <Link
+          href="/"
+          className="font-plex text-xs text-mud underline-offset-4 transition hover:text-ink hover:underline"
+        >
+          ← 로비로
+        </Link>
+        <button
+          onClick={copyLink}
+          className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+        >
+          {copied ? "복사됨 ✓" : "공유 링크 복사"}
+        </button>
+      </header>
+
+      {/* 플레이어 패널 */}
+      <div className="mb-4 flex w-full max-w-[590px] items-center justify-between gap-2">
+        {(["b", "w"] as const).map((c) => {
+          const p = players.find((pl) => pl.color === c) ?? null;
+          const isTurn =
+            room.status === "playing" && p && room.current_turn === p.player_id;
+          return (
+            <div
+              key={c}
+              className={`flex flex-1 items-center gap-2 rounded-lg border px-4 py-2.5 transition ${
+                isTurn ? "border-vermil bg-paper-deep shadow" : "border-mud/30"
+              }`}
+            >
+              <span
+                className={`h-4 w-4 shrink-0 rounded-full ${
+                  c === "b" ? "bg-ink" : "border border-mud/60 bg-white"
+                }`}
+              />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">
+                  {p ? p.nickname : "대기 중…"}
+                  {p && p.player_id === myId && (
+                    <span className="ml-1 font-plex text-[10px] text-mud">(나)</span>
+                  )}
+                </p>
+                <p className="font-plex text-[10px] text-mud">
+                  {COLOR_LABEL[c]}
+                  {isTurn ? " · 차례" : ""}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <Board
+        board={board}
+        lastMove={lastMove}
+        winLine={winLine}
+        previewColor={myTurn && me ? me.color : null}
+        onPlace={place}
+      />
+
+      {/* 상태 배너 */}
+      <div className="mt-5 w-full max-w-[590px]">
+        {room.status === "waiting" && (
+          <div className="banner-in rounded-lg border border-mud/30 bg-paper-deep px-6 py-4 text-center">
+            <p className="font-semibold">친구를 기다리는 중입니다</p>
+            <p className="mt-1 font-plex text-xs text-mud">
+              아래 링크를 보내면 바로 대국이 시작됩니다.
+            </p>
+            <button
+              onClick={copyLink}
+              className="mt-3 rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+            >
+              {copied ? "복사됨 ✓" : "공유 링크 복사"}
+            </button>
+          </div>
+        )}
+
+        {room.status === "playing" && (
+          <p className="text-center font-plex text-xs text-mud">
+            {isSpectator
+              ? "관전 중입니다"
+              : myTurn
+                ? "당신 차례입니다 — 원하는 자리를 클릭하세요"
+                : `${opponent?.nickname ?? "상대"}의 차례입니다`}
+          </p>
+        )}
+
+        {finished && (
+          <div className="banner-in rounded-lg border border-vermil/50 bg-paper-deep px-6 py-4 text-center shadow">
+            <p className="text-xl font-semibold">
+              {room.winner === "draw"
+                ? "무승부"
+                : room.winner === myId
+                  ? "승리했습니다"
+                  : `${winnerPlayer?.nickname ?? "상대"} 승리`}
+            </p>
+            <p className="mt-1 font-plex text-xs text-mud">
+              {room.state.moves.length}수 · 기록이 저장되었습니다
+            </p>
+            <Link
+              href="/"
+              className="mt-3 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+            >
+              로비로
+            </Link>
+          </div>
+        )}
+      </div>
+
+      <NicknameModal
+        open={needJoin}
+        defaultValue={typeof window !== "undefined" ? getStoredNickname() : ""}
+        title={players.length === 0 ? "방을 만들었습니다 — 닉네임 입력" : "대국에 참가합니다 — 닉네임 입력"}
+        onSubmit={join}
+      />
+    </Shell>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center px-4 py-6">
+      {children}
+    </main>
+  );
+}
