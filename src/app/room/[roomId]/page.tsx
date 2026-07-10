@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Board from "@/components/Board";
 import NicknameModal from "@/components/NicknameModal";
 import {
@@ -20,6 +20,7 @@ const COLOR_LABEL = { b: "흑", w: "백" } as const;
 
 export default function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
+  const router = useRouter();
   const supabase = useMemo(() => getSupabase(), []);
 
   const [myId, setMyId] = useState("");
@@ -28,7 +29,17 @@ export default function RoomPage() {
   const [loaded, setLoaded] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [copied, setCopied] = useState(false);
-  const savedRef = useRef(false);
+  const savedRef = useRef<string | null>(null); // 기록 저장을 마친 room id
+
+  // roomId가 바뀌면(재대결 등) 렌더 단계에서 상태 리셋 — React 권장 패턴
+  const [prevRoomId, setPrevRoomId] = useState(roomId);
+  if (prevRoomId !== roomId) {
+    setPrevRoomId(roomId);
+    setRoom(null);
+    setPlayers([]);
+    setLoaded(false);
+    setNotFound(false);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -95,6 +106,15 @@ export default function RoomPage() {
   const opponent = players.find((p) => p.player_id !== myId) ?? null;
   const isSpectator = loaded && !me && players.length >= 2;
   const needJoin = loaded && Boolean(room) && myId !== "" && !me && players.length < 2;
+  const rematch = room?.rematch ?? null;
+
+  // 재대결 성사 → 새 방으로 이동
+  useEffect(() => {
+    const nextId = rematch?.next_room_id;
+    if (nextId && me) {
+      router.push(`/room/${nextId}`);
+    }
+  }, [rematch?.next_room_id, me, router]);
 
   // 방 참가
   const join = useCallback(
@@ -170,11 +190,77 @@ export default function RoomPage() {
     [supabase, room, me, opponent, myId, roomId],
   );
 
-  // 종료 시 기록 저장 (플레이어만, 1회)
+  // ---------- 재대결 ----------
+
+  const requestRematch = useCallback(async () => {
+    if (!supabase || !room || !me) return;
+    const value = { by: myId };
+    setRoom((prev) => (prev ? { ...prev, rematch: value } : prev));
+    await supabase
+      .from("game_rooms")
+      .update({ rematch: value })
+      .eq("id", roomId)
+      .eq("status", "finished");
+  }, [supabase, room, me, myId, roomId]);
+
+  const declineRematch = useCallback(async () => {
+    if (!supabase || !room || !rematch) return;
+    const value = { ...rematch, declined: true };
+    setRoom((prev) => (prev ? { ...prev, rematch: value } : prev));
+    await supabase.from("game_rooms").update({ rematch: value }).eq("id", roomId);
+  }, [supabase, room, rematch, roomId]);
+
+  const acceptRematch = useCallback(async () => {
+    if (!supabase || !room || !me || !opponent || !rematch) return;
+    // 색 교대: 이전 판의 흑 ↔ 백
+    const myNewColor: StoneColor = me.color === "b" ? "w" : "b";
+    const oppNewColor: StoneColor = opponent.color === "b" ? "w" : "b";
+    const blackId = myNewColor === "b" ? me.player_id : opponent.player_id;
+
+    const { data: newRoom, error } = await supabase
+      .from("game_rooms")
+      .insert({
+        game_type: "omok",
+        status: "playing",
+        state: { moves: [] },
+        current_turn: blackId,
+      })
+      .select("id")
+      .single();
+    if (error || !newRoom) return;
+
+    await supabase.from("game_players").insert([
+      {
+        room_id: newRoom.id,
+        player_id: me.player_id,
+        user_id: me.user_id,
+        nickname: me.nickname,
+        color: myNewColor,
+      },
+      {
+        room_id: newRoom.id,
+        player_id: opponent.player_id,
+        user_id: opponent.user_id,
+        nickname: opponent.nickname,
+        color: oppNewColor,
+      },
+    ]);
+
+    // 상대에게 새 방을 알림
+    await supabase
+      .from("game_rooms")
+      .update({ rematch: { ...rematch, next_room_id: newRoom.id } })
+      .eq("id", roomId);
+
+    router.push(`/room/${newRoom.id}`);
+  }, [supabase, room, me, opponent, rematch, roomId, router]);
+
+  // 종료 시 기록 저장 (플레이어만, 방마다 1회)
   useEffect(() => {
-    if (!room || room.status !== "finished" || !me || savedRef.current) return;
+    if (!room || room.status !== "finished" || !me) return;
+    if (savedRef.current === room.id) return;
     if (room.state.moves.length === 0) return;
-    savedRef.current = true;
+    savedRef.current = room.id;
 
     const record = {
       roomId: room.id,
@@ -261,6 +347,8 @@ export default function RoomPage() {
     finished && room.winner !== "draw" && lastMove
       ? (checkWin(board, lastMove.x, lastMove.y)?.line ?? null)
       : null;
+
+  const rematchPending = rematch && !rematch.declined && !rematch.next_room_id;
 
   return (
     <Shell>
@@ -361,12 +449,82 @@ export default function RoomPage() {
             <p className="mt-1 font-plex text-xs text-mud">
               {room.state.moves.length}수 · 기록이 저장되었습니다
             </p>
-            <Link
-              href="/"
-              className="mt-3 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
-            >
-              로비로
-            </Link>
+
+            {/* 재대결 */}
+            {me && !rematch && (
+              <div className="mt-3 flex justify-center gap-2">
+                <button
+                  onClick={requestRematch}
+                  className="rounded bg-vermil px-6 py-2 text-sm text-paper transition hover:opacity-85"
+                >
+                  재대결 신청
+                </button>
+                <Link
+                  href="/"
+                  className="rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+                >
+                  로비로
+                </Link>
+              </div>
+            )}
+
+            {me && rematchPending && rematch.by === myId && (
+              <p className="mt-3 font-plex text-xs text-mud">
+                재대결을 신청했습니다 — {opponent?.nickname ?? "상대"}의 수락을 기다리는 중…
+              </p>
+            )}
+
+            {me && rematchPending && rematch.by !== myId && (
+              <div className="mt-3">
+                <p className="text-sm">
+                  <span className="font-semibold">{opponent?.nickname ?? "상대"}</span>
+                  님이 재대결을 신청했습니다. (흑/백 교대)
+                </p>
+                <div className="mt-2 flex justify-center gap-2">
+                  <button
+                    onClick={acceptRematch}
+                    className="rounded bg-vermil px-6 py-2 text-sm text-paper transition hover:opacity-85"
+                  >
+                    수락
+                  </button>
+                  <button
+                    onClick={declineRematch}
+                    className="rounded border border-mud/40 px-6 py-2 text-sm text-ink-soft transition hover:border-ink"
+                  >
+                    거절
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {me && rematch?.declined && (
+              <div className="mt-3">
+                <p className="font-plex text-xs text-mud">
+                  {rematch.by === myId
+                    ? "상대가 재대결을 거절했습니다."
+                    : "재대결을 거절했습니다."}
+                </p>
+                <Link
+                  href="/"
+                  className="mt-2 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+                >
+                  로비로
+                </Link>
+              </div>
+            )}
+
+            {me && rematch?.next_room_id && !rematch.declined && (
+              <p className="mt-3 font-plex text-xs text-vermil">새 대국으로 이동 중…</p>
+            )}
+
+            {!me && (
+              <Link
+                href="/"
+                className="mt-3 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+              >
+                로비로
+              </Link>
+            )}
           </div>
         )}
       </div>

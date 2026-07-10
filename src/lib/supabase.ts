@@ -18,6 +18,12 @@ export function getSupabase(): SupabaseClient | null {
 }
 
 // DB row 타입
+export interface RematchState {
+  by?: string; // 신청한 player_id
+  declined?: boolean; // 거절됨
+  next_room_id?: string; // 수락되어 만들어진 새 방
+}
+
 export interface RoomRow {
   id: string;
   game_type: string;
@@ -25,6 +31,7 @@ export interface RoomRow {
   state: { moves: { x: number; y: number; c: "b" | "w" }[] };
   current_turn: string | null;
   winner: string | null; // player_id 또는 'draw'
+  rematch: RematchState | null;
   created_at: string;
   finished_at: string | null;
 }
