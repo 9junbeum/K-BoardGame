@@ -9,6 +9,8 @@ import {
   applyMove,
   boardFromMoves,
   checkWin,
+  DEFAULT_RULES,
+  isForbiddenMove,
   nextColor,
   type StoneColor,
 } from "@/games/omok/logic";
@@ -29,6 +31,7 @@ export default function RoomPage() {
   const [loaded, setLoaded] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const savedRef = useRef<string | null>(null); // 기록 저장을 마친 room id
 
   // roomId가 바뀌면(재대결 등) 렌더 단계에서 상태 리셋 — React 권장 패턴
@@ -39,6 +42,7 @@ export default function RoomPage() {
     setPlayers([]);
     setLoaded(false);
     setNotFound(false);
+    setMoveError(null);
   }
 
   useEffect(() => {
@@ -107,6 +111,8 @@ export default function RoomPage() {
   const isSpectator = loaded && !me && players.length >= 2;
   const needJoin = loaded && Boolean(room) && myId !== "" && !me && players.length < 2;
   const rematch = room?.rematch ?? null;
+  const rules = room?.rules ?? DEFAULT_RULES;
+  const undo = room?.undo ?? null;
 
   // 재대결 성사 → 새 방으로 이동
   useEffect(() => {
@@ -121,7 +127,16 @@ export default function RoomPage() {
     async (nickname: string) => {
       if (!supabase || !room) return;
       storeNickname(nickname);
-      const color: StoneColor = players.length === 0 ? "b" : "w";
+      let color: StoneColor;
+      if (players.length === 0) {
+        // 방장(첫 입장자) 색 = 선공 규칙 적용
+        color =
+          rules.firstMove === "host" ? "b"
+          : rules.firstMove === "guest" ? "w"
+          : Math.random() < 0.5 ? "b" : "w";
+      } else {
+        color = players[0].color === "b" ? "w" : "b";
+      }
       const { error } = await supabase.from("game_players").insert({
         room_id: roomId,
         player_id: myId,
@@ -143,7 +158,7 @@ export default function RoomPage() {
       }
       await fetchPlayers();
     },
-    [supabase, room, players, roomId, myId, fetchPlayers],
+    [supabase, room, players, roomId, myId, fetchPlayers, rules],
   );
 
   // 착수
@@ -153,13 +168,19 @@ export default function RoomPage() {
       if (room.current_turn !== myId) return;
       if (me.color !== nextColor(room.state.moves)) return;
 
-      const r = applyMove(room.state, x, y);
+      if (isForbiddenMove(room.state, x, y, rules)) {
+        setMoveError("삼삼(3×3) 금지 — 열린 3이 두 개 생기는 자리입니다.");
+        setTimeout(() => setMoveError(null), 2200);
+        return;
+      }
+      const r = applyMove(room.state, x, y, rules);
       if (!r) return;
 
       const finished = Boolean(r.win) || r.draw;
       const update = {
         state: r.state,
         current_turn: finished ? null : opponent?.player_id ?? null,
+        undo: { used: undo?.used ?? [] }, // 대기 중인 무르기 신청은 착수로 무효화
         ...(finished && {
           status: "finished" as const,
           winner: r.draw ? "draw" : myId,
@@ -187,8 +208,51 @@ export default function RoomPage() {
         if (fresh) setRoom(fresh as RoomRow);
       }
     },
-    [supabase, room, me, opponent, myId, roomId],
+    [supabase, room, me, opponent, myId, roomId, rules, undo],
   );
+
+  // ---------- 무르기 ----------
+
+  const lastMoveColor = room?.state.moves.at(-1)?.c ?? null;
+  const undoUsedByMe = (undo?.used ?? []).includes(myId);
+  const canRequestUndo =
+    room?.status === "playing" &&
+    Boolean(me) &&
+    lastMoveColor === me?.color &&
+    !undoUsedByMe &&
+    !undo?.by;
+
+  const requestUndo = useCallback(async () => {
+    if (!supabase || !room || !me || !opponent) return;
+    const value = { ...(undo ?? {}), by: myId, declined: undefined };
+    setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
+    await supabase
+      .from("game_rooms")
+      .update({ undo: value })
+      .eq("id", roomId)
+      .eq("status", "playing")
+      .eq("current_turn", opponent.player_id);
+  }, [supabase, room, me, opponent, undo, myId, roomId]);
+
+  const acceptUndo = useCallback(async () => {
+    if (!supabase || !room || !me || !undo?.by) return;
+    const moves = room.state.moves.slice(0, -1);
+    const value = { used: [...(undo.used ?? []), undo.by] };
+    const update = { state: { moves }, current_turn: undo.by, undo: value };
+    setRoom((prev) => (prev ? { ...prev, ...update } : prev));
+    await supabase
+      .from("game_rooms")
+      .update(update)
+      .eq("id", roomId)
+      .eq("current_turn", myId); // 내 차례일 때만 (동시성 가드)
+  }, [supabase, room, me, undo, myId, roomId]);
+
+  const declineUndo = useCallback(async () => {
+    if (!supabase || !room || !undo?.by) return;
+    const value = { used: undo.used ?? [], declined: undo.by };
+    setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
+    await supabase.from("game_rooms").update({ undo: value }).eq("id", roomId);
+  }, [supabase, room, undo, roomId]);
 
   // ---------- 재대결 ----------
 
@@ -224,6 +288,8 @@ export default function RoomPage() {
         status: "playing",
         state: { moves: [] },
         current_turn: blackId,
+        rules: room.rules ?? DEFAULT_RULES,
+        undo: null,
       })
       .select("id")
       .single();
@@ -377,12 +443,19 @@ export default function RoomPage() {
         >
           ← 로비로
         </Link>
-        <button
-          onClick={copyLink}
-          className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
-        >
-          {copied ? "복사됨 ✓" : "공유 링크 복사"}
-        </button>
+        <div className="flex items-center gap-2">
+          {rules.forbidDoubleThree && (
+            <span className="rounded-full border border-vermil/50 px-2.5 py-1 font-plex text-[10px] text-vermil">
+              삼삼 금지
+            </span>
+          )}
+          <button
+            onClick={copyLink}
+            className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+          >
+            {copied ? "복사됨 ✓" : "공유 링크 복사"}
+          </button>
+        </div>
       </header>
 
       {/* 플레이어 패널 */}
@@ -446,13 +519,61 @@ export default function RoomPage() {
         )}
 
         {room.status === "playing" && (
-          <p className="text-center font-plex text-xs text-mud">
-            {isSpectator
-              ? "관전 중입니다"
-              : myTurn
-                ? "당신 차례입니다 — 원하는 자리를 클릭하세요"
-                : `${opponent?.nickname ?? "상대"}의 차례입니다`}
-          </p>
+          <div className="text-center">
+            <p className="font-plex text-xs text-mud">
+              {isSpectator
+                ? "관전 중입니다"
+                : myTurn
+                  ? "당신 차례입니다 — 원하는 자리를 클릭하세요"
+                  : `${opponent?.nickname ?? "상대"}의 차례입니다`}
+            </p>
+            {moveError && (
+              <p className="banner-in mt-2 font-plex text-xs text-vermil">{moveError}</p>
+            )}
+
+            {/* 무르기 */}
+            {me && canRequestUndo && (
+              <button
+                onClick={requestUndo}
+                className="mt-3 rounded border border-mud/40 px-4 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+              >
+                무르기 신청 (1회)
+              </button>
+            )}
+            {me && undo?.by === myId && (
+              <p className="mt-3 font-plex text-xs text-mud">
+                무르기를 신청했습니다 — {opponent?.nickname ?? "상대"}의 수락 대기 중…
+              </p>
+            )}
+            {me && undo?.by && undo.by !== myId && (
+              <div className="banner-in mt-3 rounded-lg border border-mud/30 bg-paper-deep px-4 py-3">
+                <p className="text-sm">
+                  <span className="font-semibold">{opponent?.nickname ?? "상대"}</span>
+                  님이 무르기를 신청했습니다.
+                </p>
+                <div className="mt-2 flex justify-center gap-2">
+                  <button
+                    onClick={acceptUndo}
+                    className="rounded bg-vermil px-5 py-1.5 text-sm text-paper transition hover:opacity-85"
+                  >
+                    수락
+                  </button>
+                  <button
+                    onClick={declineUndo}
+                    className="rounded border border-mud/40 px-5 py-1.5 text-sm text-ink-soft transition hover:border-ink"
+                  >
+                    거절
+                  </button>
+                </div>
+              </div>
+            )}
+            {me && undo?.declined === myId && !undo?.by && (
+              <p className="mt-3 font-plex text-xs text-mud">상대가 무르기를 거절했습니다.</p>
+            )}
+            {me && undoUsedByMe && !undo?.by && (
+              <p className="mt-1 font-plex text-[10px] text-mud/70">무르기를 이미 사용했습니다.</p>
+            )}
+          </div>
         )}
 
         {finished && (

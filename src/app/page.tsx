@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import HistoryList from "@/components/HistoryList";
+import RoomSettingsModal from "@/components/RoomSettingsModal";
+import type { Rules } from "@/games/omok/logic";
 import { loadLocalHistory, loadServerHistory, type GameRecord } from "@/lib/history";
 import { getSupabase, supabaseEnabled } from "@/lib/supabase";
 
@@ -12,6 +14,7 @@ export default function LobbyPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [records, setRecords] = useState<GameRecord[]>([]);
   const [creating, setCreating] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 인증 상태 구독
@@ -40,27 +43,36 @@ export default function LobbyPage() {
     };
   }, [session]);
 
-  const startGame = useCallback(async () => {
+  const startGame = useCallback(() => {
     setError(null);
-    const supabase = getSupabase();
-    if (!supabase) {
+    if (!supabaseEnabled) {
       // Supabase 미설정 → 같은 화면 대국으로
       router.push("/room/local");
       return;
     }
-    setCreating(true);
-    const { data, error: err } = await supabase
-      .from("game_rooms")
-      .insert({ game_type: "omok", status: "waiting", state: { moves: [] } })
-      .select("id")
-      .single();
-    setCreating(false);
-    if (err || !data) {
-      setError("방을 만들지 못했습니다. Supabase 설정을 확인해 주세요.");
-      return;
-    }
-    router.push(`/room/${data.id}`);
+    setShowSettings(true);
   }, [router]);
+
+  const createRoom = useCallback(
+    async (rules: Rules) => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      setCreating(true);
+      const { data, error: err } = await supabase
+        .from("game_rooms")
+        .insert({ game_type: "omok", status: "waiting", state: { moves: [] }, rules })
+        .select("id")
+        .single();
+      setCreating(false);
+      if (err || !data) {
+        setShowSettings(false);
+        setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
+        return;
+      }
+      router.push(`/room/${data.id}`);
+    },
+    [router],
+  );
 
   const signIn = useCallback(() => {
     const supabase = getSupabase();
@@ -167,6 +179,13 @@ export default function LobbyPage() {
       <footer className="mt-auto pt-12 text-center font-plex text-[10px] uppercase tracking-widest text-mud">
         omok online — a quiet board for two
       </footer>
+
+      <RoomSettingsModal
+        open={showSettings}
+        creating={creating}
+        onCreate={createRoom}
+        onClose={() => setShowSettings(false)}
+      />
     </main>
   );
 }

@@ -6,8 +6,11 @@ import Board from "@/components/Board";
 import {
   applyMove,
   boardFromMoves,
+  DEFAULT_RULES,
+  isForbiddenMove,
   nextColor,
   type GameState,
+  type StoneColor,
   type WinResult,
 } from "@/games/omok/logic";
 import { saveLocalRecord } from "@/lib/history";
@@ -19,16 +22,29 @@ export default function LocalRoomPage() {
   const [win, setWin] = useState<WinResult | null>(null);
   const [draw, setDraw] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [forbidDoubleThree, setForbidDoubleThree] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [undoUsed, setUndoUsed] = useState<Record<StoneColor, boolean>>({ b: false, w: false });
 
   const board = useMemo(() => boardFromMoves(state.moves), [state.moves]);
   const lastMove = state.moves.at(-1) ?? null;
   const turn = nextColor(state.moves);
   const finished = Boolean(win) || draw;
 
+  const rules = useMemo(
+    () => ({ ...DEFAULT_RULES, forbidDoubleThree }),
+    [forbidDoubleThree],
+  );
+
   const place = useCallback(
     (x: number, y: number) => {
       if (finished) return;
-      const r = applyMove(state, x, y);
+      if (isForbiddenMove(state, x, y, rules)) {
+        setMoveError("삼삼(3×3) 금지 — 열린 3이 두 개 생기는 자리입니다.");
+        setTimeout(() => setMoveError(null), 2200);
+        return;
+      }
+      const r = applyMove(state, x, y, rules);
       if (!r) return;
       setState(r.state);
       if (r.win) setWin(r.win);
@@ -45,14 +61,24 @@ export default function LocalRoomPage() {
         setSaved(true);
       }
     },
-    [state, finished, saved],
+    [state, finished, saved, rules],
   );
+
+  const lastColor = state.moves.at(-1)?.c ?? null;
+  const canUndo = !finished && lastColor !== null && !undoUsed[lastColor];
+
+  const undoMove = useCallback(() => {
+    if (!canUndo || !lastColor) return;
+    setState((prev) => ({ moves: prev.moves.slice(0, -1) }));
+    setUndoUsed((prev) => ({ ...prev, [lastColor]: true }));
+  }, [canUndo, lastColor]);
 
   const reset = useCallback(() => {
     setState({ moves: [] });
     setWin(null);
     setDraw(false);
     setSaved(false);
+    setUndoUsed({ b: false, w: false });
   }, []);
 
   return (
@@ -93,6 +119,26 @@ export default function LocalRoomPage() {
         ))}
       </div>
 
+      <div className="mb-3 flex items-center gap-4">
+        <label className="flex cursor-pointer items-center gap-1.5 font-plex text-xs text-ink-soft">
+          <input
+            type="checkbox"
+            checked={forbidDoubleThree}
+            disabled={state.moves.length > 0}
+            onChange={(e) => setForbidDoubleThree(e.target.checked)}
+            className="h-4 w-4 accent-[#8b2a1f]"
+          />
+          삼삼 금지
+        </label>
+        <button
+          onClick={undoMove}
+          disabled={!canUndo}
+          className="rounded border border-mud/40 px-3 py-1 font-plex text-xs text-ink-soft transition hover:border-ink disabled:opacity-40"
+        >
+          무르기 ({COLOR_LABEL[lastColor ?? turn]} 1회)
+        </button>
+      </div>
+
       <Board
         board={board}
         lastMove={lastMove}
@@ -100,6 +146,10 @@ export default function LocalRoomPage() {
         previewColor={finished ? null : turn}
         onPlace={place}
       />
+
+      {moveError && (
+        <p className="banner-in mt-3 font-plex text-xs text-vermil">{moveError}</p>
+      )}
 
       {finished && (
         <div className="banner-in mt-5 w-full max-w-[590px] rounded-lg border border-vermil/50 bg-paper-deep px-6 py-4 text-center shadow">

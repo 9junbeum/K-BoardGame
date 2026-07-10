@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyMove,
+  isForbiddenMove,
   boardFromMoves,
   canPlace,
   checkWin,
@@ -164,5 +165,71 @@ describe("승리 판정 위치", () => {
     const board = boardFromMoves(s.moves);
     expect(checkWin(board, 4, 0)?.color).toBe("b");
     expect(checkWin(board, 0, 5)).toBeNull(); // 백 4목 자리는 승리 아님
+  });
+});
+
+describe("삼삼(쌍삼) 금지 규칙", () => {
+  const RULES = { forbidDoubleThree: true, firstMove: "random" as const };
+
+  it("두 개의 열린 3을 동시에 만들면 금수", () => {
+    // 흑: 세로 (7,5),(7,6) + 가로 (5,7),(6,7) → (7,7)에 두면 쌍삼
+    const s = play([
+      [7, 5], [0, 0],
+      [7, 6], [0, 1],
+      [5, 7], [0, 2],
+      [6, 7], [0, 3],
+    ]);
+    expect(isForbiddenMove(s, 7, 7, RULES)).toBe(true);
+    expect(applyMove(s, 7, 7, RULES)).toBeNull();
+    // 규칙이 꺼져 있으면 허용
+    expect(isForbiddenMove(s, 7, 7, { ...RULES, forbidDoubleThree: false })).toBe(false);
+    expect(applyMove(s, 7, 7)).not.toBeNull();
+  });
+
+  it("한쪽 3이 상대 돌로 막혀 있으면 삼삼이 아니다", () => {
+    // 세로 3은 (7,4)가 백으로 막힘 → 열린 3은 가로 하나뿐
+    const s = play([
+      [7, 5], [7, 4],
+      [7, 6], [0, 0],
+      [5, 7], [0, 1],
+      [6, 7], [0, 2],
+    ]);
+    expect(isForbiddenMove(s, 7, 7, RULES)).toBe(false);
+    expect(applyMove(s, 7, 7, RULES)).not.toBeNull();
+  });
+
+  it("띈 삼(.X.XX.)도 열린 3으로 센다", () => {
+    // 가로: (4,7),(6,7) + 세로: (7,5),(7,9)? → 대신 명확한 케이스:
+    // 가로 (4,7),(6,7) → (5,7)? 아니고, (7,7)에 두면 가로 (4,7),(6,7),(7,7) = X.XX
+    // 세로 (7,5),(7,6) 연속 3
+    const s = play([
+      [4, 7], [0, 0],
+      [6, 7], [0, 1],
+      [7, 5], [0, 2],
+      [7, 6], [0, 3],
+    ]);
+    // (7,7): 가로 X..XX 형태? (4,7),(6,7),(7,7) → .X.XX. 띈 삼 ✓, 세로 연속 삼 ✓ → 쌍삼
+    expect(isForbiddenMove(s, 7, 7, RULES)).toBe(true);
+  });
+
+  it("5목을 완성하는 수는 삼삼이어도 허용", () => {
+    // 흑 가로 (0..3, 0) 4목 → (4,0)이 쌍삼이 되도록 구성하기 어려우므로
+    // 규칙: checkWin 우선 확인만 검증 — 4목 + 아무 자리
+    const s = play([
+      [0, 0], [0, 5],
+      [1, 0], [1, 5],
+      [2, 0], [2, 5],
+      [3, 0], [3, 5],
+    ]);
+    const r = applyMove(s, 4, 0, RULES);
+    expect(r?.win?.color).toBe("b");
+  });
+
+  it("열린 3 하나만 만드는 수는 허용", () => {
+    const s = play([
+      [7, 5], [0, 0],
+      [7, 6], [0, 1],
+    ]);
+    expect(isForbiddenMove(s, 7, 7, RULES)).toBe(false);
   });
 });
