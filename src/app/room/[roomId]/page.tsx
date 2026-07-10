@@ -289,10 +289,28 @@ export default function RoomPage() {
   }, [room, me, opponent, myId, supabase]);
 
   const copyLink = useCallback(() => {
-    navigator.clipboard.writeText(window.location.href).then(() => {
+    const url = window.location.href;
+    const markCopied = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    });
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(markCopied);
+      return;
+    }
+    // 비보안 컨텍스트(http + LAN IP) 폴백
+    const ta = document.createElement("textarea");
+    ta.value = url;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      markCopied();
+    } finally {
+      document.body.removeChild(ta);
+    }
   }, []);
 
   // ---------- 렌더링 ----------

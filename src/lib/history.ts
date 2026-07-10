@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Move } from "@/games/omok/logic";
+import { generateId } from "@/lib/id";
 
 export type GameResult = "win" | "lose" | "draw";
 
@@ -31,7 +32,7 @@ export function loadLocalHistory(): GameRecord[] {
 export function saveLocalRecord(record: Omit<GameRecord, "id" | "playedAt">): GameRecord {
   const full: GameRecord = {
     ...record,
-    id: crypto.randomUUID(),
+    id: generateId(),
     playedAt: new Date().toISOString(),
   };
   const list = [full, ...loadLocalHistory()].slice(0, MAX_LOCAL_RECORDS);
