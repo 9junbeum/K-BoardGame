@@ -385,10 +385,29 @@ export default function YutRoom({ roomId }: { roomId: string }) {
                 </p>
               </div>
               {p && state && (
-                <p className="mt-0.5 font-plex text-[10px] text-mud">
-                  대기 {ready} · 완주 {done}/{rules.pieceCount}
-                  {isTurn ? " · 차례" : ""}
-                </p>
+                <>
+                  <div className="mt-1 flex items-center gap-1">
+                    {pcs.map((pc, pi) => (
+                      <span
+                        key={pi}
+                        title={pc.pos === "done" ? "완주" : pc.pos === "ready" ? "대기" : "판 위"}
+                        className="inline-block h-3 w-3 rounded-full border"
+                        style={{
+                          borderColor: PLAYER_COLORS[i],
+                          backgroundColor:
+                            pc.pos === "ready"
+                              ? "transparent"
+                              : PLAYER_COLORS[i],
+                          opacity: pc.pos === "done" ? 0.35 : 1,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <p className="mt-0.5 font-plex text-[10px] text-mud">
+                    대기 {ready} · 완주 {done}/{rules.pieceCount}
+                    {isTurn ? " · 차례" : ""}
+                  </p>
+                </>
               )}
             </div>
           );
@@ -429,21 +448,22 @@ export default function YutRoom({ roomId }: { roomId: string }) {
         </div>
       )}
 
-      {/* 마지막 던지기 */}
+      {/* 마지막 던지기 (토스 애니메이션) */}
       {state?.lastThrow && room.status !== "waiting" && (
-        <div className="mb-3 flex items-center gap-3">
-          <div className="flex gap-1.5">
+        <div key={state.lastThrow.at} className="stick-area mb-3 flex h-14 items-center gap-4">
+          <div className="flex gap-2">
             {state.lastThrow.sticks.map((flat, i) => (
               <span
                 key={i}
-                className={`inline-block h-8 w-3 rounded-full border ${
-                  flat ? "border-mud/50 bg-paper" : "border-ink bg-ink-soft"
+                className={`stick stick-toss ${flat ? "stick-flat" : "stick-round"} ${
+                  flat && i === 0 && rules.backdo ? "stick-mark" : ""
                 }`}
+                style={{ animationDelay: `${i * 70}ms` }}
                 title={flat ? "배" : "등"}
               />
             ))}
           </div>
-          <p className="text-lg font-bold text-vermil">
+          <p className="throw-label text-2xl font-bold text-vermil">
             {YUT_RESULT_LABEL[state.lastThrow.result]}
             <span className="ml-2 font-plex text-[10px] font-normal text-mud">
               {players.find((p) => p.player_id === state.lastThrow?.by)?.nickname}

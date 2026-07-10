@@ -63,7 +63,7 @@ export interface YutState {
   /** 현재 턴 플레이어가 남은 던지기 횟수 */
   throwsLeft: number;
   /** 마지막 던지기 (연출용) */
-  lastThrow: { by: string; result: YutResult; sticks: boolean[] } | null;
+  lastThrow: { by: string; result: YutResult; sticks: boolean[]; at: number } | null;
 }
 
 export function createYutState(order: string[], rules: YutRules): YutState {
@@ -97,12 +97,18 @@ export function throwSticks(
 }
 
 /** 던진 결과를 대기열에 반영 */
-export function applyThrow(state: YutState, by: string, result: YutResult, sticks: boolean[]): YutState {
+export function applyThrow(
+  state: YutState,
+  by: string,
+  result: YutResult,
+  sticks: boolean[],
+  at: number = Date.now(),
+): YutState {
   return {
     ...state,
     pending: [...state.pending, result],
     throwsLeft: state.throwsLeft - 1 + (grantsExtraThrow(result) ? 1 : 0),
-    lastThrow: { by, result, sticks },
+    lastThrow: { by, result, sticks, at },
   };
 }
 

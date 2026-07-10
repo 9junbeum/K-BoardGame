@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { NODE_COORDS, type YutPiece } from "@/games/yut/logic";
 
 export const PLAYER_COLORS = ["#8b2a1f", "#1a1614", "#2b4a6f", "#5a6f2b"];
+const PLAYER_COLORS_LIGHT = ["#c96a5c", "#5c534d", "#6d8fbd", "#96ad64"];
 
 const PAD = 44;
 const CELL = 94;
@@ -13,30 +15,86 @@ function px(v: number): number {
 }
 
 const BIG_NODES = new Set([0, 5, 10, 15, 22]);
+const STEP_MS = 160;
+
+/**
+ * 말 하나 — trail이 길어지면 경로를 따라 칸칸이 이동하는 애니메이션.
+ * 대기(ready) 말은 출발점에 투명하게 두어 투입 모션이 자연스럽게 이어진다.
+ */
+function AnimatedPiece({
+  trail,
+  visible,
+  colorIdx,
+  dx,
+  dy,
+}: {
+  trail: number[];
+  visible: boolean;
+  colorIdx: number;
+  dx: number;
+  dy: number;
+}) {
+  const [pos, setPos] = useState<number>(trail[trail.length - 1] ?? 0);
+  const prevTrailRef = useRef<number[]>(trail);
+
+  useEffect(() => {
+    const prev = prevTrailRef.current;
+    prevTrailRef.current = trail;
+    const target = trail[trail.length - 1] ?? 0;
+    const start = prev[prev.length - 1] ?? 0;
+    if (start === target && prev.length === trail.length) return;
+
+    // 앞으로 이동: 새 trail에서 start 이후 구간을 순서대로 밟는다
+    let path: number[];
+    const i = trail.length > prev.length ? trail.lastIndexOf(start) : -1;
+    if (i >= 0 && i < trail.length - 1) {
+      path = trail.slice(i + 1);
+    } else {
+      path = [target]; // 빽도/잡힘 등은 한 번에
+    }
+
+    let step = 0;
+    const id = setInterval(() => {
+      setPos(path[step]);
+      step++;
+      if (step >= path.length) clearInterval(id);
+    }, STEP_MS);
+    return () => clearInterval(id);
+  }, [trail]);
+
+  const c = NODE_COORDS[pos] ?? NODE_COORDS[0];
+  const cx = px(c.x) + dx;
+  const cy = px(c.y) + dy;
+
+  return (
+    <g
+      className="yut-piece"
+      pointerEvents="none"
+      style={{ transform: `translate(${cx}px, ${cy}px)`, opacity: visible ? 1 : 0 }}
+    >
+      {/* 그림자 */}
+      <ellipse cx="0" cy="10" rx="10" ry="3.6" fill="rgba(26,22,20,0.3)" />
+      {/* 몸통 */}
+      <circle cx="0" cy="1" r="10.5" fill={`url(#piece-g-${colorIdx})`} stroke="rgba(0,0,0,0.35)" strokeWidth="0.6" />
+      {/* 머리 */}
+      <circle cx="0" cy="-8.5" r="6" fill={`url(#piece-g-${colorIdx})`} stroke="rgba(0,0,0,0.35)" strokeWidth="0.6" />
+      {/* 하이라이트 */}
+      <ellipse cx="-2.5" cy="-10.5" rx="2.2" ry="1.6" fill="rgba(255,255,255,0.55)" />
+      <ellipse cx="-3" cy="-2.5" rx="3" ry="2.2" fill="rgba(255,255,255,0.35)" />
+    </g>
+  );
+}
 
 interface YutBoardProps {
   pieces: Record<string, YutPiece[]>;
   /** 턴 순서 = 색 배정 순서 */
   order: string[];
-  /** 클릭 가능한 노드 (선택된 결과를 적용할 내 말이 있는 곳) */
+  /** 클릭 가능한 노드 */
   selectableNodes?: Set<number>;
   onNodeClick?: (node: number) => void;
 }
 
 export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }: YutBoardProps) {
-  // 노드별 점유 현황: node → { playerIdx, count }[]
-  const occupancy = new Map<number, { idx: number; count: number }[]>();
-  order.forEach((pid, idx) => {
-    for (const p of pieces[pid] ?? []) {
-      if (typeof p.pos !== "number") continue;
-      const list = occupancy.get(p.pos) ?? [];
-      const entry = list.find((e) => e.idx === idx);
-      if (entry) entry.count += 1;
-      else list.push({ idx, count: 1 });
-      occupancy.set(p.pos, list);
-    }
-  });
-
   const edges: [number, number][] = [];
   for (let i = 0; i < 19; i++) edges.push([i, i + 1]);
   edges.push([19, 0]);
@@ -53,6 +111,13 @@ export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }
           <stop offset="0%" stopColor="var(--color-board-hi)" />
           <stop offset="100%" stopColor="var(--color-board-lo)" />
         </linearGradient>
+        {PLAYER_COLORS.map((c, i) => (
+          <radialGradient key={i} id={`piece-g-${i}`} cx="0.35" cy="0.3" r="1">
+            <stop offset="0%" stopColor={PLAYER_COLORS_LIGHT[i]} />
+            <stop offset="55%" stopColor={c} />
+            <stop offset="100%" stopColor="#100d0b" />
+          </radialGradient>
+        ))}
       </defs>
 
       <rect x="0" y="0" width={W} height={W} rx="10" fill="url(#yut-wood)" />
@@ -61,7 +126,7 @@ export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }
         fill="none" stroke="rgba(122,111,92,0.35)" strokeWidth="1"
       />
 
-      {/* 연결선: 둘레 */}
+      {/* 연결선 */}
       {edges.map(([a, b]) => (
         <line
           key={`e-${a}-${b}`}
@@ -70,7 +135,6 @@ export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }
           stroke="#8a7a5f" strokeWidth="2"
         />
       ))}
-      {/* 대각선 */}
       <line x1={px(5)} y1={px(0)} x2={px(0)} y2={px(5)} stroke="#8a7a5f" strokeWidth="2" />
       <line x1={px(0)} y1={px(0)} x2={px(5)} y2={px(5)} stroke="#8a7a5f" strokeWidth="2" />
 
@@ -93,13 +157,13 @@ export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }
             />
             {big && (
               <circle
-                cx={px(c.x)} cy={px(c.y)} r={big ? 12 : 8}
+                cx={px(c.x)} cy={px(c.y)} r={12}
                 fill="none" stroke="#8a7a5f" strokeWidth="1.2"
               />
             )}
             {selectable && (
               <circle
-                cx={px(c.x)} cy={px(c.y)} r={big ? 26 : 20}
+                cx={px(c.x)} cy={px(c.y)} r={big ? 27 : 21}
                 fill="none" stroke="var(--color-vermil)" strokeWidth="2.5"
                 strokeDasharray="5 4"
               />
@@ -108,43 +172,31 @@ export default function YutBoard({ pieces, order, selectableNodes, onNodeClick }
         );
       })}
 
-      {/* 출발 표시 */}
       <text
-        x={px(5)} y={px(5) + 38}
-        textAnchor="middle"
-        fontSize="12"
-        fill="#6d5f48"
+        x={px(5)} y={px(5) + 40}
+        textAnchor="middle" fontSize="12" fill="#6d5f48"
         fontFamily="var(--font-plex)"
       >
         출발·도착
       </text>
 
-      {/* 말 */}
-      {Array.from(occupancy.entries()).map(([node, list]) => {
-        const c = NODE_COORDS[node];
-        return list.map((e, li) => {
-          const off = (li - (list.length - 1) / 2) * 16;
+      {/* 말 (플레이어/말 인덱스로 identity 고정 → 이동 애니메이션) */}
+      {order.map((pid, playerIdx) =>
+        (pieces[pid] ?? []).map((p, pieceIdx) => {
+          const onBoard = typeof p.pos === "number";
+          const trail = onBoard && p.trail.length > 0 ? p.trail : [0];
           return (
-            <g key={`p-${node}-${e.idx}`} className="stone-pop" pointerEvents="none">
-              <circle
-                cx={px(c.x) + off} cy={px(c.y)} r={12}
-                fill={PLAYER_COLORS[e.idx]}
-                stroke="var(--color-paper)"
-                strokeWidth="2"
-              />
-              {e.count > 1 && (
-                <text
-                  x={px(c.x) + off} y={px(c.y) + 4.5}
-                  textAnchor="middle" fontSize="13" fontWeight="bold"
-                  fill="var(--color-paper)"
-                >
-                  {e.count}
-                </text>
-              )}
-            </g>
+            <AnimatedPiece
+              key={`pc-${pid}-${pieceIdx}`}
+              trail={trail}
+              visible={onBoard}
+              colorIdx={playerIdx}
+              dx={(pieceIdx - 1.5) * 5}
+              dy={pieceIdx * -2}
+            />
           );
-        });
-      })}
+        }),
+      )}
     </svg>
   );
 }

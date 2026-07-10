@@ -58,3 +58,80 @@ body {
 .banner-in {
   animation: banner-in 0.3s ease-out;
 }
+
+/* ---------- 윷놀이 연출 ---------- */
+
+/* 윷가락 던지기 */
+.stick-area {
+  perspective: 420px;
+}
+
+.stick {
+  display: inline-block;
+  width: 14px;
+  height: 46px;
+  border-radius: 7px;
+  position: relative;
+}
+
+.stick-flat {
+  background: linear-gradient(90deg, #faf3e4, #e6d7b6 70%, #d5c197);
+  border: 1px solid #b8a67f;
+}
+
+.stick-round {
+  background: linear-gradient(90deg, #55483d, #2b2420 65%, #1a1614);
+  border: 1px solid #14100e;
+}
+
+.stick-mark::after {
+  content: "✕";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #8b2a1f;
+}
+
+@keyframes stick-toss {
+  0% {
+    transform: translateY(0) rotateX(0deg);
+  }
+  35% {
+    transform: translateY(-30px) rotateX(400deg);
+  }
+  70% {
+    transform: translateY(5px) rotateX(680deg);
+  }
+  100% {
+    transform: translateY(0) rotateX(720deg);
+  }
+}
+
+.stick-toss {
+  animation: stick-toss 0.75s cubic-bezier(0.3, 0.7, 0.4, 1) both;
+  transform-style: preserve-3d;
+}
+
+/* 던지기 결과 라벨: 가락이 떨어진 뒤에 등장 */
+@keyframes throw-label {
+  0%, 80% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.throw-label {
+  animation: throw-label 1s ease-out both;
+}
+
+/* 말 이동: transform 트랜지션 (노드 간 글라이드) */
+.yut-piece {
+  transition: transform 0.16s linear, opacity 0.4s ease;
+}
