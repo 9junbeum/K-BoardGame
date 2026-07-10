@@ -1,0 +1,686 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import Board from "@/components/Board";
+import NicknameModal from "@/components/NicknameModal";
+import {
+  applyMove,
+  boardFromMoves,
+  checkWin,
+  DEFAULT_RULES,
+  isForbiddenMove,
+  nextColor,
+  type StoneColor,
+} from "@/games/omok/logic";
+import { saveLocalRecord, saveServerRecord } from "@/lib/history";
+import { getPlayerId, getStoredNickname, storeNickname } from "@/lib/player";
+import { getSupabase, type PlayerRow, type RoomRow } from "@/lib/supabase";
+
+const COLOR_LABEL = { b: "흑", w: "백" } as const;
+
+export default function OmokRoom({ roomId }: { roomId: string }) {
+  const router = useRouter();
+  const supabase = useMemo(() => getSupabase(), []);
+
+  const [myId, setMyId] = useState("");
+  const [room, setRoom] = useState<RoomRow | null>(null);
+  const [players, setPlayers] = useState<PlayerRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const savedRef = useRef<string | null>(null); // 기록 저장을 마친 room id
+
+  // roomId가 바뀌면(재대결 등) 렌더 단계에서 상태 리셋 — React 권장 패턴
+  const [prevRoomId, setPrevRoomId] = useState(roomId);
+  if (prevRoomId !== roomId) {
+    setPrevRoomId(roomId);
+    setRoom(null);
+    setPlayers([]);
+    setLoaded(false);
+    setNotFound(false);
+    setMoveError(null);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setMyId(getPlayerId());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const fetchPlayers = useCallback(async () => {
+    if (!supabase) return;
+    const { data } = await supabase
+      .from("game_players")
+      .select("*")
+      .eq("room_id", roomId)
+      .order("joined_at", { ascending: true });
+    if (data) setPlayers(data as PlayerRow[]);
+  }, [supabase, roomId]);
+
+  // 초기 로드 + Realtime 구독
+  useEffect(() => {
+    if (!supabase || !roomId) return;
+    let cancelled = false;
+
+    (async () => {
+      const { data } = await supabase
+        .from("game_rooms")
+        .select("*")
+        .eq("id", roomId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (!data) {
+        setNotFound(true);
+      } else {
+        setRoom(data as RoomRow);
+        await fetchPlayers();
+      }
+      setLoaded(true);
+    })();
+
+    const channel = supabase
+      .channel(`room:${roomId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "game_rooms", filter: `id=eq.${roomId}` },
+        (payload) => setRoom(payload.new as RoomRow),
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "game_players", filter: `room_id=eq.${roomId}` },
+        () => fetchPlayers(),
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, roomId, fetchPlayers]);
+
+  const me = players.find((p) => p.player_id === myId) ?? null;
+  const opponent = players.find((p) => p.player_id !== myId) ?? null;
+  const isSpectator = loaded && !me && players.length >= 2;
+  const needJoin = loaded && Boolean(room) && myId !== "" && !me && players.length < 2;
+  const rematch = room?.rematch ?? null;
+  const rules = room?.rules ?? DEFAULT_RULES;
+  const undo = room?.undo ?? null;
+
+  // 재대결 성사 → 새 방으로 이동
+  useEffect(() => {
+    const nextId = rematch?.next_room_id;
+    if (nextId && me) {
+      router.push(`/room/${nextId}`);
+    }
+  }, [rematch?.next_room_id, me, router]);
+
+  // 방 참가
+  const join = useCallback(
+    async (nickname: string) => {
+      if (!supabase || !room) return;
+      storeNickname(nickname);
+      let color: StoneColor;
+      if (players.length === 0) {
+        // 방장(첫 입장자) 색 = 선공 규칙 적용
+        color =
+          rules.firstMove === "host" ? "b"
+          : rules.firstMove === "guest" ? "w"
+          : Math.random() < 0.5 ? "b" : "w";
+      } else {
+        color = players[0].color === "b" ? "w" : "b";
+      }
+      const { error } = await supabase.from("game_players").insert({
+        room_id: roomId,
+        player_id: myId,
+        nickname,
+        color,
+      });
+      if (error) {
+        await fetchPlayers();
+        return;
+      }
+      // 두 번째 참가자가 게임을 시작 상태로 전환
+      if (players.length === 1) {
+        const black = players[0].color === "b" ? players[0].player_id : myId;
+        await supabase
+          .from("game_rooms")
+          .update({ status: "playing", current_turn: black })
+          .eq("id", roomId)
+          .eq("status", "waiting");
+      }
+      await fetchPlayers();
+    },
+    [supabase, room, players, roomId, myId, fetchPlayers, rules],
+  );
+
+  // 착수
+  const place = useCallback(
+    async (x: number, y: number) => {
+      if (!supabase || !room || !me || room.status !== "playing") return;
+      if (room.current_turn !== myId) return;
+      if (me.color !== nextColor(room.state.moves)) return;
+
+      if (isForbiddenMove(room.state, x, y, rules)) {
+        setMoveError("삼삼(3×3) 금지 — 열린 3이 두 개 생기는 자리입니다.");
+        setTimeout(() => setMoveError(null), 2200);
+        return;
+      }
+      const r = applyMove(room.state, x, y, rules);
+      if (!r) return;
+
+      const finished = Boolean(r.win) || r.draw;
+      const update = {
+        state: r.state,
+        current_turn: finished ? null : opponent?.player_id ?? null,
+        undo: { used: undo?.used ?? [] }, // 대기 중인 무르기 신청은 착수로 무효화
+        ...(finished && {
+          status: "finished" as const,
+          winner: r.draw ? "draw" : myId,
+          finished_at: new Date().toISOString(),
+        }),
+      };
+
+      // 낙관적 반영
+      setRoom((prev) => (prev ? { ...prev, ...update } : prev));
+
+      const { data, error } = await supabase
+        .from("game_rooms")
+        .update(update)
+        .eq("id", roomId)
+        .eq("current_turn", myId) // 최소한의 턴 검증
+        .select("id");
+
+      if (error || !data || data.length === 0) {
+        // 실패 시 서버 상태로 복구
+        const { data: fresh } = await supabase
+          .from("game_rooms")
+          .select("*")
+          .eq("id", roomId)
+          .maybeSingle();
+        if (fresh) setRoom(fresh as RoomRow);
+      }
+    },
+    [supabase, room, me, opponent, myId, roomId, rules, undo],
+  );
+
+  // ---------- 무르기 ----------
+
+  const lastMoveColor = room?.state.moves.at(-1)?.c ?? null;
+  const undoUsedByMe = (undo?.used ?? []).includes(myId);
+  const canRequestUndo =
+    room?.status === "playing" &&
+    Boolean(me) &&
+    lastMoveColor === me?.color &&
+    !undoUsedByMe &&
+    !undo?.by;
+
+  const requestUndo = useCallback(async () => {
+    if (!supabase || !room || !me || !opponent) return;
+    const value = { ...(undo ?? {}), by: myId, declined: undefined };
+    setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
+    await supabase
+      .from("game_rooms")
+      .update({ undo: value })
+      .eq("id", roomId)
+      .eq("status", "playing")
+      .eq("current_turn", opponent.player_id);
+  }, [supabase, room, me, opponent, undo, myId, roomId]);
+
+  const acceptUndo = useCallback(async () => {
+    if (!supabase || !room || !me || !undo?.by) return;
+    const moves = room.state.moves.slice(0, -1);
+    const value = { used: [...(undo.used ?? []), undo.by] };
+    const update = { state: { moves }, current_turn: undo.by, undo: value };
+    setRoom((prev) => (prev ? { ...prev, ...update } : prev));
+    await supabase
+      .from("game_rooms")
+      .update(update)
+      .eq("id", roomId)
+      .eq("current_turn", myId); // 내 차례일 때만 (동시성 가드)
+  }, [supabase, room, me, undo, myId, roomId]);
+
+  const declineUndo = useCallback(async () => {
+    if (!supabase || !room || !undo?.by) return;
+    const value = { used: undo.used ?? [], declined: undo.by };
+    setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
+    await supabase.from("game_rooms").update({ undo: value }).eq("id", roomId);
+  }, [supabase, room, undo, roomId]);
+
+  // ---------- 재대결 ----------
+
+  const requestRematch = useCallback(async () => {
+    if (!supabase || !room || !me) return;
+    const value = { by: myId };
+    setRoom((prev) => (prev ? { ...prev, rematch: value } : prev));
+    await supabase
+      .from("game_rooms")
+      .update({ rematch: value })
+      .eq("id", roomId)
+      .eq("status", "finished");
+  }, [supabase, room, me, myId, roomId]);
+
+  const declineRematch = useCallback(async () => {
+    if (!supabase || !room || !rematch) return;
+    const value = { ...rematch, declined: true };
+    setRoom((prev) => (prev ? { ...prev, rematch: value } : prev));
+    await supabase.from("game_rooms").update({ rematch: value }).eq("id", roomId);
+  }, [supabase, room, rematch, roomId]);
+
+  const acceptRematch = useCallback(async () => {
+    if (!supabase || !room || !me || !opponent || !rematch) return;
+    // 색 교대: 이전 판의 흑 ↔ 백
+    const myNewColor: StoneColor = me.color === "b" ? "w" : "b";
+    const oppNewColor: StoneColor = opponent.color === "b" ? "w" : "b";
+    const blackId = myNewColor === "b" ? me.player_id : opponent.player_id;
+
+    const { data: newRoom, error } = await supabase
+      .from("game_rooms")
+      .insert({
+        game_type: "omok",
+        status: "playing",
+        state: { moves: [] },
+        current_turn: blackId,
+        rules: room.rules ?? DEFAULT_RULES,
+        undo: null,
+      })
+      .select("id")
+      .single();
+    if (error || !newRoom) return;
+
+    await supabase.from("game_players").insert([
+      {
+        room_id: newRoom.id,
+        player_id: me.player_id,
+        user_id: me.user_id,
+        nickname: me.nickname,
+        color: myNewColor,
+      },
+      {
+        room_id: newRoom.id,
+        player_id: opponent.player_id,
+        user_id: opponent.user_id,
+        nickname: opponent.nickname,
+        color: oppNewColor,
+      },
+    ]);
+
+    // 상대에게 새 방을 알림
+    await supabase
+      .from("game_rooms")
+      .update({ rematch: { ...rematch, next_room_id: newRoom.id } })
+      .eq("id", roomId);
+
+    router.push(`/room/${newRoom.id}`);
+  }, [supabase, room, me, opponent, rematch, roomId, router]);
+
+  // 종료 시 기록 저장 (플레이어만, 방마다 1회)
+  useEffect(() => {
+    if (!room || room.status !== "finished" || !me) return;
+    if (savedRef.current === room.id) return;
+    if (room.state.moves.length === 0) return;
+    savedRef.current = room.id;
+
+    const record = {
+      roomId: room.id,
+      gameType: "omok" as const,
+      result:
+        room.winner === "draw" ? ("draw" as const)
+        : room.winner === myId ? ("win" as const)
+        : ("lose" as const),
+      opponentNickname: opponent?.nickname ?? "?",
+      moves: room.state.moves,
+    };
+
+    (async () => {
+      const { data } = (await supabase?.auth.getSession()) ?? { data: { session: null } };
+      const session = data.session;
+      if (session && supabase) {
+        try {
+          await saveServerRecord(supabase, session.user.id, record);
+          return;
+        } catch {
+          // 서버 저장 실패 시 로컬로
+        }
+      }
+      saveLocalRecord(record);
+    })();
+  }, [room, me, opponent, myId, supabase]);
+
+  const copyLink = useCallback(() => {
+    const url = window.location.href;
+    const markCopied = () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(markCopied);
+      return;
+    }
+    // 비보안 컨텍스트(http + LAN IP) 폴백
+    const ta = document.createElement("textarea");
+    ta.value = url;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      markCopied();
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }, []);
+
+  // ---------- 렌더링 ----------
+
+  if (!supabase) {
+    return (
+      <Shell>
+        <p className="mt-20 text-center text-ink-soft">
+          실시간 대전을 하려면 Supabase 설정이 필요합니다.
+        </p>
+        <p className="mt-2 text-center font-plex text-xs text-mud">
+          .env.local 에 NEXT_PUBLIC_SUPABASE_URL / ANON_KEY를 넣고 재시작하세요.
+        </p>
+        <div className="mt-6 text-center">
+          <Link href="/room/local" className="text-vermil underline underline-offset-4">
+            같은 화면 대국으로 이동
+          </Link>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (loaded && notFound) {
+    return (
+      <Shell>
+        <p className="mt-20 text-center text-ink-soft">방을 찾을 수 없습니다.</p>
+        <div className="mt-4 text-center">
+          <Link href="/" className="text-vermil underline underline-offset-4">
+            로비로 돌아가기
+          </Link>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (!loaded || !room) {
+    return (
+      <Shell>
+        <p className="mt-20 text-center font-plex text-sm text-mud">불러오는 중…</p>
+      </Shell>
+    );
+  }
+
+  const board = boardFromMoves(room.state.moves);
+  const lastMove = room.state.moves.at(-1) ?? null;
+  const finished = room.status === "finished";
+  const myTurn = room.status === "playing" && room.current_turn === myId;
+  const winnerPlayer = players.find((p) => p.player_id === room.winner) ?? null;
+
+  // 승리 라인 재계산 (마지막 착수 기준)
+  const winLine =
+    finished && room.winner !== "draw" && lastMove
+      ? (checkWin(board, lastMove.x, lastMove.y)?.line ?? null)
+      : null;
+
+  const rematchPending = rematch && !rematch.declined && !rematch.next_room_id;
+
+  return (
+    <Shell>
+      <header className="mb-4 flex w-full items-center justify-between">
+        <Link
+          href="/"
+          className="font-plex text-xs text-mud underline-offset-4 transition hover:text-ink hover:underline"
+        >
+          ← 로비로
+        </Link>
+        <div className="flex items-center gap-2">
+          {rules.forbidDoubleThree && (
+            <span className="rounded-full border border-vermil/50 px-2.5 py-1 font-plex text-[10px] text-vermil">
+              삼삼 금지
+            </span>
+          )}
+          <button
+            onClick={copyLink}
+            className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+          >
+            {copied ? "복사됨 ✓" : "공유 링크 복사"}
+          </button>
+        </div>
+      </header>
+
+      {/* 플레이어 패널 */}
+      <div className="mb-4 flex w-full max-w-[590px] items-center justify-between gap-2">
+        {(["b", "w"] as const).map((c) => {
+          const p = players.find((pl) => pl.color === c) ?? null;
+          const isTurn =
+            room.status === "playing" && p && room.current_turn === p.player_id;
+          return (
+            <div
+              key={c}
+              className={`flex flex-1 items-center gap-2 rounded-lg border px-4 py-2.5 transition ${
+                isTurn ? "border-vermil bg-paper-deep shadow" : "border-mud/30"
+              }`}
+            >
+              <span
+                className={`h-4 w-4 shrink-0 rounded-full ${
+                  c === "b" ? "bg-ink" : "border border-mud/60 bg-white"
+                }`}
+              />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">
+                  {p ? p.nickname : "대기 중…"}
+                  {p && p.player_id === myId && (
+                    <span className="ml-1 font-plex text-[10px] text-mud">(나)</span>
+                  )}
+                </p>
+                <p className="font-plex text-[10px] text-mud">
+                  {COLOR_LABEL[c]}
+                  {isTurn ? " · 차례" : ""}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <Board
+        board={board}
+        lastMove={lastMove}
+        winLine={winLine}
+        previewColor={myTurn && me ? (me.color as StoneColor) : null}
+        onPlace={place}
+      />
+
+      {/* 상태 배너 */}
+      <div className="mt-5 w-full max-w-[590px]">
+        {room.status === "waiting" && (
+          <div className="banner-in rounded-lg border border-mud/30 bg-paper-deep px-6 py-4 text-center">
+            <p className="font-semibold">친구를 기다리는 중입니다</p>
+            <p className="mt-1 font-plex text-xs text-mud">
+              아래 링크를 보내면 바로 대국이 시작됩니다.
+            </p>
+            <button
+              onClick={copyLink}
+              className="mt-3 rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+            >
+              {copied ? "복사됨 ✓" : "공유 링크 복사"}
+            </button>
+          </div>
+        )}
+
+        {room.status === "playing" && (
+          <div className="text-center">
+            <p className="font-plex text-xs text-mud">
+              {isSpectator
+                ? "관전 중입니다"
+                : myTurn
+                  ? "당신 차례입니다 — 원하는 자리를 클릭하세요"
+                  : `${opponent?.nickname ?? "상대"}의 차례입니다`}
+            </p>
+            {moveError && (
+              <p className="banner-in mt-2 font-plex text-xs text-vermil">{moveError}</p>
+            )}
+
+            {/* 무르기 */}
+            {me && canRequestUndo && (
+              <button
+                onClick={requestUndo}
+                className="mt-3 rounded border border-mud/40 px-4 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+              >
+                무르기 신청 (1회)
+              </button>
+            )}
+            {me && undo?.by === myId && (
+              <p className="mt-3 font-plex text-xs text-mud">
+                무르기를 신청했습니다 — {opponent?.nickname ?? "상대"}의 수락 대기 중…
+              </p>
+            )}
+            {me && undo?.by && undo.by !== myId && (
+              <div className="banner-in mt-3 rounded-lg border border-mud/30 bg-paper-deep px-4 py-3">
+                <p className="text-sm">
+                  <span className="font-semibold">{opponent?.nickname ?? "상대"}</span>
+                  님이 무르기를 신청했습니다.
+                </p>
+                <div className="mt-2 flex justify-center gap-2">
+                  <button
+                    onClick={acceptUndo}
+                    className="rounded bg-vermil px-5 py-1.5 text-sm text-paper transition hover:opacity-85"
+                  >
+                    수락
+                  </button>
+                  <button
+                    onClick={declineUndo}
+                    className="rounded border border-mud/40 px-5 py-1.5 text-sm text-ink-soft transition hover:border-ink"
+                  >
+                    거절
+                  </button>
+                </div>
+              </div>
+            )}
+            {me && undo?.declined === myId && !undo?.by && (
+              <p className="mt-3 font-plex text-xs text-mud">상대가 무르기를 거절했습니다.</p>
+            )}
+            {me && undoUsedByMe && !undo?.by && (
+              <p className="mt-1 font-plex text-[10px] text-mud/70">무르기를 이미 사용했습니다.</p>
+            )}
+          </div>
+        )}
+
+        {finished && (
+          <div className="banner-in rounded-lg border border-vermil/50 bg-paper-deep px-6 py-4 text-center shadow">
+            <p className="text-xl font-semibold">
+              {room.winner === "draw"
+                ? "무승부"
+                : room.winner === myId
+                  ? "승리했습니다"
+                  : `${winnerPlayer?.nickname ?? "상대"} 승리`}
+            </p>
+            <p className="mt-1 font-plex text-xs text-mud">
+              {room.state.moves.length}수 · 기록이 저장되었습니다
+            </p>
+
+            {/* 재대결 */}
+            {me && !rematch && (
+              <div className="mt-3 flex justify-center gap-2">
+                <button
+                  onClick={requestRematch}
+                  className="rounded bg-vermil px-6 py-2 text-sm text-paper transition hover:opacity-85"
+                >
+                  재대결 신청
+                </button>
+                <Link
+                  href="/"
+                  className="rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+                >
+                  로비로
+                </Link>
+              </div>
+            )}
+
+            {me && rematchPending && rematch.by === myId && (
+              <p className="mt-3 font-plex text-xs text-mud">
+                재대결을 신청했습니다 — {opponent?.nickname ?? "상대"}의 수락을 기다리는 중…
+              </p>
+            )}
+
+            {me && rematchPending && rematch.by !== myId && (
+              <div className="mt-3">
+                <p className="text-sm">
+                  <span className="font-semibold">{opponent?.nickname ?? "상대"}</span>
+                  님이 재대결을 신청했습니다. (흑/백 교대)
+                </p>
+                <div className="mt-2 flex justify-center gap-2">
+                  <button
+                    onClick={acceptRematch}
+                    className="rounded bg-vermil px-6 py-2 text-sm text-paper transition hover:opacity-85"
+                  >
+                    수락
+                  </button>
+                  <button
+                    onClick={declineRematch}
+                    className="rounded border border-mud/40 px-6 py-2 text-sm text-ink-soft transition hover:border-ink"
+                  >
+                    거절
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {me && rematch?.declined && (
+              <div className="mt-3">
+                <p className="font-plex text-xs text-mud">
+                  {rematch.by === myId
+                    ? "상대가 재대결을 거절했습니다."
+                    : "재대결을 거절했습니다."}
+                </p>
+                <Link
+                  href="/"
+                  className="mt-2 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+                >
+                  로비로
+                </Link>
+              </div>
+            )}
+
+            {me && rematch?.next_room_id && !rematch.declined && (
+              <p className="mt-3 font-plex text-xs text-vermil">새 대국으로 이동 중…</p>
+            )}
+
+            {!me && (
+              <Link
+                href="/"
+                className="mt-3 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+              >
+                로비로
+              </Link>
+            )}
+          </div>
+        )}
+      </div>
+
+      <NicknameModal
+        open={needJoin}
+        defaultValue={typeof window !== "undefined" ? getStoredNickname() : ""}
+        title={players.length === 0 ? "방을 만들었습니다 — 닉네임 입력" : "대국에 참가합니다 — 닉네임 입력"}
+        onSubmit={join}
+      />
+    </Shell>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center px-4 py-6">
+      {children}
+    </main>
+  );
+}

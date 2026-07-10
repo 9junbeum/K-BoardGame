@@ -7,7 +7,7 @@ export type GameResult = "win" | "lose" | "draw";
 export interface GameRecord {
   id: string;
   roomId: string | null;
-  gameType: "omok";
+  gameType: "omok" | "yut";
   result: GameResult;
   opponentNickname: string;
   moves: Move[] | null;
@@ -72,7 +72,7 @@ export async function loadServerHistory(
   return (data ?? []).map((r) => ({
     id: r.id as string,
     roomId: r.room_id as string | null,
-    gameType: "omok",
+    gameType: (r.game_type as "omok" | "yut") ?? "omok",
     result: r.result as GameResult,
     opponentNickname: (r.opponent_nickname as string) ?? "?",
     moves: r.moves as Move[] | null,

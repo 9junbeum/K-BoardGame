@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import HistoryList from "@/components/HistoryList";
 import RoomSettingsModal from "@/components/RoomSettingsModal";
+import YutSettingsModal from "@/components/YutSettingsModal";
 import type { Rules } from "@/games/omok/logic";
+import type { YutRules } from "@/games/yut/logic";
 import { loadLocalHistory, loadServerHistory, type GameRecord } from "@/lib/history";
 import { getSupabase, supabaseEnabled } from "@/lib/supabase";
 
@@ -15,6 +17,7 @@ export default function LobbyPage() {
   const [records, setRecords] = useState<GameRecord[]>([]);
   const [creating, setCreating] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showYutSettings, setShowYutSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 인증 상태 구독
@@ -66,6 +69,27 @@ export default function LobbyPage() {
       setCreating(false);
       if (err || !data) {
         setShowSettings(false);
+        setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
+        return;
+      }
+      router.push(`/room/${data.id}`);
+    },
+    [router],
+  );
+
+  const createYutRoom = useCallback(
+    async (rules: YutRules) => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      setCreating(true);
+      const { data, error: err } = await supabase
+        .from("game_rooms")
+        .insert({ game_type: "yut", status: "waiting", state: {}, rules })
+        .select("id")
+        .single();
+      setCreating(false);
+      if (err || !data) {
+        setShowYutSettings(false);
         setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
         return;
       }
@@ -128,20 +152,32 @@ export default function LobbyPage() {
 
       {/* 히어로 */}
       <section className="mt-16 text-center">
-        <h1 className="text-5xl font-bold leading-tight tracking-tight">오목</h1>
+        <h1 className="text-5xl font-bold leading-tight tracking-tight">오목 · 윷놀이</h1>
         <p className="mx-auto mt-4 max-w-md text-ink-soft">
           멀리 있는 친구와, 가입 없이 링크 하나로.
           <br />
-          돌을 놓는 순간 상대의 화면에도 놓입니다.
+          수를 두는 순간 상대의 화면에도 그대로.
         </p>
         <div className="mt-8 flex flex-col items-center gap-3">
-          <button
-            onClick={startGame}
-            disabled={creating}
-            className="rounded-md bg-ink px-10 py-3.5 text-lg text-paper shadow-lg transition hover:bg-ink-soft disabled:opacity-50"
-          >
-            {creating ? "방을 만드는 중…" : "오목 시작하기"}
-          </button>
+          <div className="flex flex-wrap justify-center gap-3">
+            <button
+              onClick={startGame}
+              disabled={creating}
+              className="rounded-md bg-ink px-8 py-3.5 text-lg text-paper shadow-lg transition hover:bg-ink-soft disabled:opacity-50"
+            >
+              오목 시작하기
+            </button>
+            {supabaseEnabled && (
+              <button
+                onClick={() => setShowYutSettings(true)}
+                disabled={creating}
+                className="rounded-md bg-vermil px-8 py-3.5 text-lg text-paper shadow-lg transition hover:opacity-85 disabled:opacity-50"
+              >
+                윷놀이 시작하기
+                <span className="ml-1.5 font-plex text-xs opacity-80">2~4인</span>
+              </button>
+            )}
+          </div>
           <button
             onClick={() => router.push("/room/local")}
             className="font-plex text-xs text-mud underline-offset-4 transition hover:text-ink hover:underline"
@@ -185,6 +221,12 @@ export default function LobbyPage() {
         creating={creating}
         onCreate={createRoom}
         onClose={() => setShowSettings(false)}
+      />
+      <YutSettingsModal
+        open={showYutSettings}
+        creating={creating}
+        onCreate={createYutRoom}
+        onClose={() => setShowYutSettings(false)}
       />
     </main>
   );

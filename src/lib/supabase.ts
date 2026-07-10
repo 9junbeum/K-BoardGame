@@ -50,6 +50,6 @@ export interface PlayerRow {
   player_id: string;
   user_id: string | null;
   nickname: string;
-  color: "b" | "w" | null;
+  color: string | null; // 오목: 'b'|'w', 윷놀이: "0".."3" (입장 순서)
   joined_at: string;
 }

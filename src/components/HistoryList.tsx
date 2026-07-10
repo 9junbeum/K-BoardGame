@@ -36,7 +36,9 @@ export default function HistoryList({ records }: { records: GameRecord[] }) {
               </p>
             </div>
           </div>
-          <span className="font-plex text-[10px] uppercase tracking-widest text-mud">omok</span>
+          <span className="font-plex text-[10px] uppercase tracking-widest text-mud">
+            {r.gameType === "yut" ? "윷놀이" : "오목"}
+          </span>
         </li>
       ))}
     </ul>
