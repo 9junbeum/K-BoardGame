@@ -135,3 +135,14 @@ body {
 .yut-piece {
   transition: transform 0.16s linear, opacity 0.4s ease;
 }
+
+/* 왼쪽 여백의 큰 윷가락 */
+.stick-lg {
+  width: 22px;
+  height: 78px;
+  border-radius: 11px;
+}
+
+.stick-lg.stick-mark::after {
+  font-size: 15px;
+}

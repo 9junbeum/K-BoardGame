@@ -357,189 +357,150 @@ export default function YutRoom({ roomId }: { roomId: string }) {
         </div>
       </header>
 
-      {/* 플레이어 패널 */}
-      <div className="mb-4 grid w-full max-w-[558px] grid-cols-2 gap-2 sm:grid-cols-4">
-        {Array.from({ length: MAX_PLAYERS }, (_, i) => {
-          const p = players[i] ?? null;
-          const isTurn = p && room.status === "playing" && room.current_turn === p.player_id;
-          const pcs = p && state ? state.pieces[p.player_id] ?? [] : [];
-          const ready = pcs.filter((x) => x.pos === "ready").length;
-          const done = pcs.filter((x) => x.pos === "done").length;
-          return (
+      <div className="flex w-full flex-col gap-4 lg:flex-row lg:items-start lg:justify-center">
+        {/* 왼쪽: 윷 던지기 연출 */}
+        <aside className="w-full lg:w-56 lg:shrink-0 lg:pt-8">
+          {state?.lastThrow && room.status !== "waiting" ? (
             <div
-              key={i}
-              className={`rounded-lg border px-3 py-2 transition ${
-                isTurn ? "border-vermil bg-paper-deep shadow" : "border-mud/30"
-              } ${!p ? "opacity-40" : ""}`}
+              key={state.lastThrow.at}
+              className="stick-area banner-in flex flex-row items-center justify-center gap-5 rounded-lg border border-mud/30 bg-paper-deep px-4 py-4 lg:flex-col lg:py-8"
             >
-              <div className="flex items-center gap-1.5">
-                <span
-                  className="h-3.5 w-3.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: PLAYER_COLORS[i] }}
-                />
-                <p className="truncate text-sm font-semibold">
-                  {p ? p.nickname : "빈 자리"}
-                  {p && p.player_id === myId && (
-                    <span className="ml-1 font-plex text-[10px] text-mud">(나)</span>
-                  )}
+              <div className="flex gap-2.5">
+                {state.lastThrow.sticks.map((flat, i) => (
+                  <span
+                    key={i}
+                    className={`stick stick-lg stick-toss ${flat ? "stick-flat" : "stick-round"} ${
+                      flat && i === 0 && rules.backdo ? "stick-mark" : ""
+                    }`}
+                    style={{ animationDelay: `${i * 70}ms` }}
+                    title={flat ? "배" : "등"}
+                  />
+                ))}
+              </div>
+              <div className="throw-label text-center">
+                <p className="text-4xl font-bold text-vermil">
+                  {YUT_RESULT_LABEL[state.lastThrow.result]}
+                </p>
+                <p className="mt-1 font-plex text-[11px] text-mud">
+                  {players.find((p) => p.player_id === state.lastThrow?.by)?.nickname}
                 </p>
               </div>
-              {p && state && (
-                <>
-                  <div className="mt-1 flex items-center gap-1">
-                    {pcs.map((pc, pi) => (
-                      <span
-                        key={pi}
-                        title={pc.pos === "done" ? "완주" : pc.pos === "ready" ? "대기" : "판 위"}
-                        className="inline-block h-3 w-3 rounded-full border"
-                        style={{
-                          borderColor: PLAYER_COLORS[i],
-                          backgroundColor:
-                            pc.pos === "ready"
-                              ? "transparent"
-                              : PLAYER_COLORS[i],
-                          opacity: pc.pos === "done" ? 0.35 : 1,
-                        }}
-                      />
-                    ))}
-                  </div>
-                  <p className="mt-0.5 font-plex text-[10px] text-mud">
-                    대기 {ready} · 완주 {done}/{rules.pieceCount}
-                    {isTurn ? " · 차례" : ""}
-                  </p>
-                </>
-              )}
             </div>
-          );
-        })}
-      </div>
-
-      {/* 대기 중 */}
-      {room.status === "waiting" && (
-        <div className="banner-in mb-4 w-full max-w-[558px] rounded-lg border border-mud/30 bg-paper-deep px-6 py-4 text-center">
-          <p className="font-semibold">
-            참가자 {players.length}/{MAX_PLAYERS}명 — 친구를 기다리는 중
-          </p>
-          <p className="mt-1 font-plex text-xs text-mud">
-            링크를 보내면 바로 참가할 수 있습니다. 2명부터 시작 가능.
-          </p>
-          <div className="mt-3 flex justify-center gap-2">
-            <button
-              onClick={copyLink}
-              className="rounded border border-mud/40 bg-paper px-5 py-2 text-sm text-ink-soft transition hover:border-ink"
-            >
-              {copied ? "복사됨 ✓" : "공유 링크 복사"}
-            </button>
-            {isHost && (
-              <button
-                onClick={startGame}
-                disabled={players.length < 2}
-                className="rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft disabled:opacity-40"
-              >
-                게임 시작
-              </button>
-            )}
-          </div>
-          {!isHost && me && (
-            <p className="mt-2 font-plex text-[11px] text-mud">
-              방장({players[0]?.nickname})이 시작하길 기다리는 중…
-            </p>
+          ) : (
+            room.status === "playing" && (
+              <div className="hidden rounded-lg border border-dashed border-mud/30 px-4 py-10 text-center font-plex text-xs text-mud lg:block">
+                윷을 던지면
+                <br />
+                여기에 결과가 나옵니다
+              </div>
+            )
           )}
-        </div>
-      )}
+        </aside>
 
-      {/* 마지막 던지기 (토스 애니메이션) */}
-      {state?.lastThrow && room.status !== "waiting" && (
-        <div key={state.lastThrow.at} className="stick-area mb-3 flex h-14 items-center gap-4">
-          <div className="flex gap-2">
-            {state.lastThrow.sticks.map((flat, i) => (
-              <span
-                key={i}
-                className={`stick stick-toss ${flat ? "stick-flat" : "stick-round"} ${
-                  flat && i === 0 && rules.backdo ? "stick-mark" : ""
-                }`}
-                style={{ animationDelay: `${i * 70}ms` }}
-                title={flat ? "배" : "등"}
-              />
-            ))}
-          </div>
-          <p className="throw-label text-2xl font-bold text-vermil">
-            {YUT_RESULT_LABEL[state.lastThrow.result]}
-            <span className="ml-2 font-plex text-[10px] font-normal text-mud">
-              {players.find((p) => p.player_id === state.lastThrow?.by)?.nickname}
-            </span>
-          </p>
-        </div>
-      )}
-
-      <YutBoard
-        pieces={state?.pieces ?? {}}
-        order={state?.order ?? []}
-        selectableNodes={selectableNodes}
-        onNodeClick={(node) => applyTo(node)}
-      />
-
-      {/* 조작 영역 */}
-      <div className="mt-4 w-full max-w-[558px]">
-        {room.status === "playing" && state && (
-          <div className="text-center">
-            {!me && <p className="font-plex text-xs text-mud">관전 중입니다</p>}
-
-            {me && !myTurn && (
-              <p className="font-plex text-xs text-mud">
-                {turnPlayer?.nickname ?? "상대"}의 차례입니다
+        {/* 중앙: 보드 + 조작 */}
+        <div className="flex w-full max-w-[558px] flex-col items-center lg:shrink-0">
+          {room.status === "waiting" && (
+            <div className="banner-in mb-4 w-full rounded-lg border border-mud/30 bg-paper-deep px-6 py-4 text-center">
+              <p className="font-semibold">
+                참가자 {players.length}/{MAX_PLAYERS}명 — 친구를 기다리는 중
               </p>
-            )}
-
-            {myTurn && (
-              <div className="banner-in rounded-lg border border-vermil/40 bg-paper-deep px-4 py-3">
-                {state.throwsLeft > 0 && (
+              <p className="mt-1 font-plex text-xs text-mud">
+                링크를 보내면 바로 참가할 수 있습니다. 2명부터 시작 가능.
+              </p>
+              <div className="mt-3 flex justify-center gap-2">
+                <button
+                  onClick={copyLink}
+                  className="rounded border border-mud/40 bg-paper px-5 py-2 text-sm text-ink-soft transition hover:border-ink"
+                >
+                  {copied ? "복사됨 ✓" : "공유 링크 복사"}
+                </button>
+                {isHost && (
                   <button
-                    onClick={doThrow}
-                    className="rounded bg-vermil px-8 py-2.5 text-lg text-paper shadow transition hover:opacity-85"
+                    onClick={startGame}
+                    disabled={players.length < 2}
+                    className="rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft disabled:opacity-40"
                   >
-                    윷 던지기{state.throwsLeft > 1 ? ` ×${state.throwsLeft}` : ""}
+                    게임 시작
                   </button>
                 )}
+              </div>
+              {!isHost && me && (
+                <p className="mt-2 font-plex text-[11px] text-mud">
+                  방장({players[0]?.nickname})이 시작하길 기다리는 중…
+                </p>
+              )}
+            </div>
+          )}
 
-                {state.pending.length > 0 && (
-                  <div className="mt-3">
-                    <p className="font-plex text-[11px] text-mud">
-                      적용할 결과를 고른 뒤, 움직일 말(또는 새 말)을 선택하세요
-                    </p>
-                    <div className="mt-2 flex flex-wrap justify-center gap-2">
-                      {state.pending.map((r, i) => (
-                        <button
-                          key={`${r}-${i}`}
-                          onClick={() => setSelected(r)}
-                          disabled={!canApplyResult(state, myId, r)}
-                          className={`rounded-full border px-4 py-1.5 text-sm transition ${
-                            selected === r
-                              ? "border-vermil bg-vermil text-paper"
-                              : "border-mud/40 text-ink-soft hover:border-ink disabled:opacity-40"
-                          }`}
-                        >
-                          {YUT_RESULT_LABEL[r]}
-                          <span className="ml-1 font-plex text-[10px] opacity-70">
-                            {RESULT_STEPS[r] > 0 ? `+${RESULT_STEPS[r]}` : "-1"}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                    {selected && (
-                      <div className="mt-2 flex justify-center gap-2">
-                        {canEnterNew && (
-                          <button
-                            onClick={() => applyTo("new")}
-                            className="rounded border border-vermil/60 px-4 py-1.5 font-plex text-xs text-vermil transition hover:bg-vermil hover:text-paper"
-                          >
-                            새 말 투입
-                          </button>
-                        )}
-                        {selectableNodes.size > 0 && (
-                          <span className="self-center font-plex text-[10px] text-mud">
-                            판 위의 점선 표시된 말을 클릭
-                          </span>
+          <YutBoard
+            pieces={state?.pieces ?? {}}
+            order={state?.order ?? []}
+            selectableNodes={selectableNodes}
+            onNodeClick={(node) => applyTo(node)}
+          />
+
+          <div className="mt-4 w-full">
+            {room.status === "playing" && state && (
+              <div className="text-center">
+                {!me && <p className="font-plex text-xs text-mud">관전 중입니다</p>}
+
+                {me && !myTurn && (
+                  <p className="font-plex text-xs text-mud">
+                    {turnPlayer?.nickname ?? "상대"}의 차례입니다
+                  </p>
+                )}
+
+                {myTurn && (
+                  <div className="banner-in rounded-lg border border-vermil/40 bg-paper-deep px-4 py-3">
+                    {state.throwsLeft > 0 && (
+                      <button
+                        onClick={doThrow}
+                        className="rounded bg-vermil px-8 py-2.5 text-lg text-paper shadow transition hover:opacity-85"
+                      >
+                        윷 던지기{state.throwsLeft > 1 ? ` ×${state.throwsLeft}` : ""}
+                      </button>
+                    )}
+
+                    {state.pending.length > 0 && (
+                      <div className="mt-3">
+                        <p className="font-plex text-[11px] text-mud">
+                          적용할 결과를 고른 뒤, 움직일 말(또는 새 말)을 선택하세요
+                        </p>
+                        <div className="mt-2 flex flex-wrap justify-center gap-2">
+                          {state.pending.map((r, i) => (
+                            <button
+                              key={`${r}-${i}`}
+                              onClick={() => setSelected(r)}
+                              disabled={!canApplyResult(state, myId, r)}
+                              className={`rounded-full border px-4 py-1.5 text-sm transition ${
+                                selected === r
+                                  ? "border-vermil bg-vermil text-paper"
+                                  : "border-mud/40 text-ink-soft hover:border-ink disabled:opacity-40"
+                              }`}
+                            >
+                              {YUT_RESULT_LABEL[r]}
+                              <span className="ml-1 font-plex text-[10px] opacity-70">
+                                {RESULT_STEPS[r] > 0 ? `+${RESULT_STEPS[r]}` : "-1"}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                        {selected && (
+                          <div className="mt-2 flex justify-center gap-2">
+                            {canEnterNew && (
+                              <button
+                                onClick={() => applyTo("new")}
+                                className="rounded border border-vermil/60 px-4 py-1.5 font-plex text-xs text-vermil transition hover:bg-vermil hover:text-paper"
+                              >
+                                새 말 투입
+                              </button>
+                            )}
+                            {selectableNodes.size > 0 && (
+                              <span className="self-center font-plex text-[10px] text-mud">
+                                판 위의 점선 표시된 말을 클릭
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -547,27 +508,90 @@ export default function YutRoom({ roomId }: { roomId: string }) {
                 )}
               </div>
             )}
-          </div>
-        )}
 
-        {room.status === "finished" && (
-          <div className="banner-in rounded-lg border border-vermil/50 bg-paper-deep px-6 py-4 text-center shadow">
-            <p className="text-xl font-semibold">
-              {room.winner === myId
-                ? "승리했습니다"
-                : `${winnerPlayer?.nickname ?? "상대"} 승리`}
-            </p>
-            <p className="mt-1 font-plex text-xs text-mud">
-              모든 말 완주{me ? " · 기록이 저장되었습니다" : ""}
-            </p>
-            <Link
-              href="/"
-              className="mt-3 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
-            >
-              로비로
-            </Link>
+            {room.status === "finished" && (
+              <div className="banner-in rounded-lg border border-vermil/50 bg-paper-deep px-6 py-4 text-center shadow">
+                <p className="text-xl font-semibold">
+                  {room.winner === myId
+                    ? "승리했습니다"
+                    : `${winnerPlayer?.nickname ?? "상대"} 승리`}
+                </p>
+                <p className="mt-1 font-plex text-xs text-mud">
+                  모든 말 완주{me ? " · 기록이 저장되었습니다" : ""}
+                </p>
+                <Link
+                  href="/"
+                  className="mt-3 inline-block rounded bg-ink px-6 py-2 text-sm text-paper transition hover:bg-ink-soft"
+                >
+                  로비로
+                </Link>
+              </div>
+            )}
           </div>
-        )}
+        </div>
+
+        {/* 오른쪽: 플레이어별 말 현황 */}
+        <aside className="w-full lg:w-56 lg:shrink-0 lg:pt-8">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+            {Array.from({ length: MAX_PLAYERS }, (_, i) => {
+              const p = players[i] ?? null;
+              const isTurn = p && room.status === "playing" && room.current_turn === p.player_id;
+              const pcs = p && state ? state.pieces[p.player_id] ?? [] : [];
+              const ready = pcs.filter((x) => x.pos === "ready").length;
+              const done = pcs.filter((x) => x.pos === "done").length;
+              return (
+                <div
+                  key={i}
+                  className={`rounded-lg border px-3 py-2.5 transition ${
+                    isTurn ? "border-vermil bg-paper-deep shadow" : "border-mud/30"
+                  } ${!p ? "opacity-40" : ""}`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="h-3.5 w-3.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: PLAYER_COLORS[i] }}
+                    />
+                    <p className="truncate text-sm font-semibold">
+                      {p ? p.nickname : "빈 자리"}
+                      {p && p.player_id === myId && (
+                        <span className="ml-1 font-plex text-[10px] text-mud">(나)</span>
+                      )}
+                    </p>
+                    {isTurn && (
+                      <span className="ml-auto font-plex text-[10px] text-vermil">차례</span>
+                    )}
+                  </div>
+                  {p && state && (
+                    <>
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        {pcs.map((pc, pi) => (
+                          <span
+                            key={pi}
+                            title={pc.pos === "done" ? "완주" : pc.pos === "ready" ? "대기" : "판 위"}
+                            className="inline-block h-3.5 w-3.5 rounded-full border"
+                            style={{
+                              borderColor: PLAYER_COLORS[i],
+                              backgroundColor:
+                                pc.pos === "ready" ? "transparent" : PLAYER_COLORS[i],
+                              opacity: pc.pos === "done" ? 0.35 : 1,
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <p className="mt-1 font-plex text-[10px] text-mud">
+                        대기 {ready} · 판 위 {rules.pieceCount - ready - done} · 완주 {done}/
+                        {rules.pieceCount}
+                      </p>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-2 hidden font-plex text-[10px] text-mud lg:block">
+            ○ 대기 · ● 판 위 · 흐림 완주
+          </p>
+        </aside>
       </div>
 
       <NicknameModal
@@ -586,7 +610,7 @@ export default function YutRoom({ roomId }: { roomId: string }) {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center px-4 py-6">
+    <main className="mx-auto flex min-h-screen max-w-6xl flex-col items-center px-4 py-6">
       {children}
     </main>
   );

@@ -37,18 +37,23 @@ function AnimatedPiece({
   const [pos, setPos] = useState<number>(trail[trail.length - 1] ?? 0);
   const prevTrailRef = useRef<number[]>(trail);
 
+  // 내용 기반 키: 같은 trail이 새 참조로 와도(낙관적 반영 → Realtime 재수신)
+  // 애니메이션 타이머가 리셋되지 않는다.
+  const trailKey = trail.join(",");
+
   useEffect(() => {
+    const t = trailKey === "" ? [0] : trailKey.split(",").map(Number);
     const prev = prevTrailRef.current;
-    prevTrailRef.current = trail;
-    const target = trail[trail.length - 1] ?? 0;
+    prevTrailRef.current = t;
+    const target = t[t.length - 1] ?? 0;
     const start = prev[prev.length - 1] ?? 0;
-    if (start === target && prev.length === trail.length) return;
+    if (start === target && prev.length === t.length) return;
 
     // 앞으로 이동: 새 trail에서 start 이후 구간을 순서대로 밟는다
     let path: number[];
-    const i = trail.length > prev.length ? trail.lastIndexOf(start) : -1;
-    if (i >= 0 && i < trail.length - 1) {
-      path = trail.slice(i + 1);
+    const i = t.length > prev.length ? t.lastIndexOf(start) : -1;
+    if (i >= 0 && i < t.length - 1) {
+      path = t.slice(i + 1);
     } else {
       path = [target]; // 빽도/잡힘 등은 한 번에
     }
@@ -60,7 +65,7 @@ function AnimatedPiece({
       if (step >= path.length) clearInterval(id);
     }, STEP_MS);
     return () => clearInterval(id);
-  }, [trail]);
+  }, [trailKey]);
 
   const c = NODE_COORDS[pos] ?? NODE_COORDS[0];
   const cx = px(c.x) + dx;
