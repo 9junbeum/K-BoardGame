@@ -37,7 +37,12 @@ export default function HistoryList({ records }: { records: GameRecord[] }) {
             </div>
           </div>
           <span className="font-plex text-[10px] uppercase tracking-widest text-mud">
-            {r.gameType === "yut" ? "윷놀이" : "오목"}
+            {r.gameType === "yut" ? "윷놀이"
+              : r.gameType === "go" ? "바둑"
+              : r.gameType === "othello" ? "오셀로"
+              : r.gameType === "sagmok" ? "사목"
+              : r.gameType === "memory" ? "카드 뒤집기"
+              : "오목"}
           </span>
         </li>
       ))}

@@ -3,10 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
+import GoSettingsModal from "@/components/GoSettingsModal";
 import HistoryList from "@/components/HistoryList";
+import MemorySettingsModal from "@/components/MemorySettingsModal";
+import OthelloSettingsModal from "@/components/OthelloSettingsModal";
 import RoomSettingsModal from "@/components/RoomSettingsModal";
+import SagmokSettingsModal from "@/components/SagmokSettingsModal";
 import YutSettingsModal from "@/components/YutSettingsModal";
+import { createGoState, type GoRules } from "@/games/go/logic";
+import { createMemoryState, type MemoryRules } from "@/games/memory/logic";
 import type { Rules } from "@/games/omok/logic";
+import { createOthelloState, type OthelloRules } from "@/games/othello/logic";
+import type { SagmokRules } from "@/games/sagmok/logic";
 import type { YutRules } from "@/games/yut/logic";
 import { loadLocalHistory, loadServerHistory, type GameRecord } from "@/lib/history";
 import { getSupabase, supabaseEnabled } from "@/lib/supabase";
@@ -18,6 +26,10 @@ export default function LobbyPage() {
   const [creating, setCreating] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showYutSettings, setShowYutSettings] = useState(false);
+  const [showGoSettings, setShowGoSettings] = useState(false);
+  const [showOthelloSettings, setShowOthelloSettings] = useState(false);
+  const [showSagmokSettings, setShowSagmokSettings] = useState(false);
+  const [showMemorySettings, setShowMemorySettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 인증 상태 구독
@@ -98,6 +110,95 @@ export default function LobbyPage() {
     [router],
   );
 
+  const createGoRoom = useCallback(
+    async (rules: GoRules) => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      setCreating(true);
+      const { data, error: err } = await supabase
+        .from("game_rooms")
+        .insert({ game_type: "go", status: "waiting", state: createGoState(), rules })
+        .select("id")
+        .single();
+      setCreating(false);
+      if (err || !data) {
+        setShowGoSettings(false);
+        setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
+        return;
+      }
+      router.push(`/room/${data.id}`);
+    },
+    [router],
+  );
+
+  const createOthelloRoom = useCallback(
+    async (rules: OthelloRules) => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      setCreating(true);
+      const { data, error: err } = await supabase
+        .from("game_rooms")
+        .insert({ game_type: "othello", status: "waiting", state: createOthelloState(), rules })
+        .select("id")
+        .single();
+      setCreating(false);
+      if (err || !data) {
+        setShowOthelloSettings(false);
+        setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
+        return;
+      }
+      router.push(`/room/${data.id}`);
+    },
+    [router],
+  );
+
+  const createSagmokRoom = useCallback(
+    async (rules: SagmokRules) => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      setCreating(true);
+      const { data, error: err } = await supabase
+        .from("game_rooms")
+        .insert({ game_type: "sagmok", status: "waiting", state: { moves: [] }, rules })
+        .select("id")
+        .single();
+      setCreating(false);
+      if (err || !data) {
+        setShowSagmokSettings(false);
+        setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
+        return;
+      }
+      router.push(`/room/${data.id}`);
+    },
+    [router],
+  );
+
+  const createMemoryRoom = useCallback(
+    async (rules: MemoryRules) => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      setCreating(true);
+      const { data, error: err } = await supabase
+        .from("game_rooms")
+        .insert({
+          game_type: "memory",
+          status: "waiting",
+          state: createMemoryState(rules.grid, rules.turnSeconds),
+          rules,
+        })
+        .select("id")
+        .single();
+      setCreating(false);
+      if (err || !data) {
+        setShowMemorySettings(false);
+        setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
+        return;
+      }
+      router.push(`/room/${data.id}`);
+    },
+    [router],
+  );
+
   const signIn = useCallback(() => {
     const supabase = getSupabase();
     if (!supabase) return;
@@ -152,7 +253,9 @@ export default function LobbyPage() {
 
       {/* 히어로 */}
       <section className="mt-16 text-center">
-        <h1 className="text-5xl font-bold leading-tight tracking-tight">오목 · 윷놀이</h1>
+        <h1 className="text-4xl font-bold leading-tight tracking-tight sm:text-5xl">
+          오목 · 윷놀이 · 바둑 · 오셀로 · 사목 · 카드 뒤집기
+        </h1>
         <p className="mx-auto mt-4 max-w-md text-ink-soft">
           멀리 있는 친구와, 가입 없이 링크 하나로.
           <br />
@@ -175,6 +278,42 @@ export default function LobbyPage() {
               >
                 윷놀이 시작하기
                 <span className="ml-1.5 font-plex text-xs opacity-80">2~4인</span>
+              </button>
+            )}
+            {supabaseEnabled && (
+              <button
+                onClick={() => setShowGoSettings(true)}
+                disabled={creating}
+                className="rounded-md border border-ink px-8 py-3.5 text-lg text-ink shadow-lg transition hover:bg-paper-deep disabled:opacity-50"
+              >
+                바둑 시작하기
+              </button>
+            )}
+            {supabaseEnabled && (
+              <button
+                onClick={() => setShowOthelloSettings(true)}
+                disabled={creating}
+                className="rounded-md border border-vermil px-8 py-3.5 text-lg text-vermil shadow-lg transition hover:bg-paper-deep disabled:opacity-50"
+              >
+                오셀로 시작하기
+              </button>
+            )}
+            {supabaseEnabled && (
+              <button
+                onClick={() => setShowSagmokSettings(true)}
+                disabled={creating}
+                className="rounded-md border border-mud/50 px-8 py-3.5 text-lg text-ink-soft shadow-lg transition hover:bg-paper-deep disabled:opacity-50"
+              >
+                사목 시작하기
+              </button>
+            )}
+            {supabaseEnabled && (
+              <button
+                onClick={() => setShowMemorySettings(true)}
+                disabled={creating}
+                className="rounded-md bg-ink-soft px-8 py-3.5 text-lg text-paper shadow-lg transition hover:opacity-85 disabled:opacity-50"
+              >
+                카드 뒤집기 시작하기
               </button>
             )}
           </div>
@@ -227,6 +366,30 @@ export default function LobbyPage() {
         creating={creating}
         onCreate={createYutRoom}
         onClose={() => setShowYutSettings(false)}
+      />
+      <GoSettingsModal
+        open={showGoSettings}
+        creating={creating}
+        onCreate={createGoRoom}
+        onClose={() => setShowGoSettings(false)}
+      />
+      <OthelloSettingsModal
+        open={showOthelloSettings}
+        creating={creating}
+        onCreate={createOthelloRoom}
+        onClose={() => setShowOthelloSettings(false)}
+      />
+      <SagmokSettingsModal
+        open={showSagmokSettings}
+        creating={creating}
+        onCreate={createSagmokRoom}
+        onClose={() => setShowSagmokSettings(false)}
+      />
+      <MemorySettingsModal
+        open={showMemorySettings}
+        creating={creating}
+        onCreate={createMemoryRoom}
+        onClose={() => setShowMemorySettings(false)}
       />
     </main>
   );

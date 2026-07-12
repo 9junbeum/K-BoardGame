@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import GoRoom from "@/components/GoRoom";
+import MemoryRoom from "@/components/MemoryRoom";
 import OmokRoom from "@/components/OmokRoom";
+import OthelloRoom from "@/components/OthelloRoom";
+import SagmokRoom from "@/components/SagmokRoom";
 import YutRoom from "@/components/YutRoom";
 import { getSupabase } from "@/lib/supabase";
 
@@ -73,7 +77,12 @@ export default function RoomPage() {
     );
   }
 
-  return gameType === "yut" ? <YutRoom roomId={roomId} /> : <OmokRoom roomId={roomId} />;
+  if (gameType === "yut") return <YutRoom roomId={roomId} />;
+  if (gameType === "go") return <GoRoom roomId={roomId} />;
+  if (gameType === "othello") return <OthelloRoom roomId={roomId} />;
+  if (gameType === "sagmok") return <SagmokRoom roomId={roomId} />;
+  if (gameType === "memory") return <MemoryRoom roomId={roomId} />;
+  return <OmokRoom roomId={roomId} />;
 }
 
 function Center({ children }: { children: React.ReactNode }) {
