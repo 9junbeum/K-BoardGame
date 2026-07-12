@@ -94,11 +94,14 @@ interface YutBoardProps {
   pieces: Record<string, YutPiece[]>;
   /** 턴 순서 = 색 배정 순서 */
   order: string[];
-  /** 클릭 가능한 노드 */
+  /** 클릭해서 선택할 수 있는(내 말이 있는) 노드 */
   selectableNodes?: Set<number>;
-  /** 현재 선택된 노드 (결과 선택 대기 중) */
+  /** 현재 선택된 노드 (이동할 칸 선택 대기 중) */
   selectedNode?: number | null;
+  /** 선택된 말이 이동할 수 있는 목적지 노드 → 표시할 라벨(결과 이름) */
+  moveTargets?: Map<number, string>;
   onNodeClick?: (node: number) => void;
+  onMoveTargetClick?: (node: number) => void;
 }
 
 export default function YutBoard({
@@ -106,7 +109,9 @@ export default function YutBoard({
   order,
   selectableNodes,
   selectedNode,
+  moveTargets,
   onNodeClick,
+  onMoveTargetClick,
 }: YutBoardProps) {
   const edges: [number, number][] = [];
   for (let i = 0; i < 19; i++) edges.push([i, i + 1]);
@@ -155,12 +160,21 @@ export default function YutBoard({
       {Object.entries(NODE_COORDS).map(([k, c]) => {
         const node = Number(k);
         const big = BIG_NODES.has(node);
-        const selectable = selectableNodes?.has(node) ?? false;
+        const moveLabel = moveTargets?.get(node);
+        const isMoveTarget = moveLabel !== undefined;
+        const selectable = !isMoveTarget && (selectableNodes?.has(node) ?? false);
+        const clickable = isMoveTarget || selectable;
         return (
           <g
             key={`n-${node}`}
-            onClick={selectable ? () => onNodeClick?.(node) : undefined}
-            className={selectable ? "cursor-pointer" : undefined}
+            onClick={
+              isMoveTarget
+                ? () => onMoveTargetClick?.(node)
+                : selectable
+                  ? () => onNodeClick?.(node)
+                  : undefined
+            }
+            className={clickable ? "cursor-pointer" : undefined}
           >
             <circle
               cx={px(c.x)} cy={px(c.y)} r={big ? 20 : 13}
@@ -186,6 +200,26 @@ export default function YutBoard({
                 cx={px(c.x)} cy={px(c.y)} r={big ? 27 : 21}
                 fill="none" stroke="var(--color-vermil)" strokeWidth="3.5"
               />
+            )}
+            {isMoveTarget && (
+              <>
+                <circle
+                  cx={px(c.x)} cy={px(c.y)} r={big ? 20 : 13}
+                  fill="rgba(58,122,78,0.22)"
+                />
+                <circle
+                  className="move-target-pulse"
+                  cx={px(c.x)} cy={px(c.y)} r={big ? 27 : 21}
+                  fill="none" stroke="#3a7a4e" strokeWidth="3"
+                />
+                <text
+                  x={px(c.x)} y={px(c.y) - (big ? 30 : 24)}
+                  textAnchor="middle" fontSize="13" fontWeight="700" fill="#2f6440"
+                  fontFamily="var(--font-plex)"
+                >
+                  {moveLabel}
+                </text>
+              </>
             )}
           </g>
         );

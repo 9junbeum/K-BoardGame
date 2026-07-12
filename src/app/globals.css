@@ -68,19 +68,56 @@ body {
 
 .stick {
   display: inline-block;
-  width: 14px;
-  height: 46px;
-  border-radius: 7px;
+  width: 18px;
+  height: 50px;
+  border-radius: 9px;
   position: relative;
+  box-shadow:
+    inset -3px 0 4px rgba(0, 0, 0, 0.18),
+    inset 2px 0 3px rgba(255, 255, 255, 0.35),
+    0 3px 5px rgba(26, 22, 20, 0.3);
 }
 
+/* 배(평평한 면)가 위로 — 통나무 속살처럼 밝은 결 무늬 */
 .stick-flat {
-  background: linear-gradient(90deg, #faf3e4, #e6d7b6 70%, #d5c197);
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(120, 96, 58, 0.16) 0px,
+      rgba(120, 96, 58, 0.16) 1px,
+      transparent 1px,
+      transparent 6px
+    ),
+    linear-gradient(90deg, #f6ecd6, #e9d6ac 55%, #d8bd8a);
   border: 1px solid #b8a67f;
 }
 
+.stick-flat::before {
+  content: "✕ ✕ ✕";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-evenly;
+  writing-mode: vertical-lr;
+  font-size: 9px;
+  letter-spacing: 6px;
+  color: rgba(122, 111, 92, 0.4);
+  pointer-events: none;
+}
+
+/* 등(둥근 면)이 위로 — 짙은 나무 껍질 */
 .stick-round {
-  background: linear-gradient(90deg, #55483d, #2b2420 65%, #1a1614);
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.12) 0px,
+      rgba(0, 0, 0, 0.12) 1px,
+      transparent 1px,
+      transparent 5px
+    ),
+    linear-gradient(90deg, #6b5947, #40332a 60%, #241c17);
   border: 1px solid #14100e;
 }
 
@@ -91,8 +128,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 13px;
+  font-weight: 700;
   color: #8b2a1f;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 @keyframes stick-toss {
@@ -145,4 +184,22 @@ body {
 
 .stick-lg.stick-mark::after {
   font-size: 15px;
+}
+
+/* 이동 가능한 목적지 칸 */
+@keyframes move-target-pulse {
+  0%, 100% {
+    opacity: 1;
+    stroke-width: 3;
+  }
+  50% {
+    opacity: 0.45;
+    stroke-width: 1.5;
+  }
+}
+
+.move-target-pulse {
+  animation: move-target-pulse 1.1s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
 }

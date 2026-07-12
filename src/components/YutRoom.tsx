@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import DisconnectBanner from "@/components/DisconnectBanner";
 import NicknameModal from "@/components/NicknameModal";
 import YutBoard, { PLAYER_COLORS } from "@/components/YutBoard";
 import {
@@ -16,12 +17,15 @@ import {
   RESULT_STEPS,
   throwSticks,
   YUT_RESULT_LABEL,
+  type YutPiece,
   type YutResult,
   type YutRules,
   type YutState,
+  type YutUndoState,
 } from "@/games/yut/logic";
 import { saveLocalRecord, saveServerRecord } from "@/lib/history";
 import { getPlayerId, getStoredNickname, storeNickname } from "@/lib/player";
+import { usePresence } from "@/lib/presence";
 import { getSupabase, type PlayerRow } from "@/lib/supabase";
 
 const MAX_PLAYERS = 4;
@@ -34,6 +38,7 @@ interface YutRoomRow {
   current_turn: string | null;
   winner: string | null;
   rules: Partial<YutRules> | null;
+  undo: YutUndoState | null;
   finished_at: string | null;
 }
 
@@ -112,6 +117,7 @@ export default function YutRoom({ roomId }: { roomId: string }) {
   );
   const state: YutState | null =
     room && room.state && "order" in room.state ? (room.state as YutState) : null;
+  const undo = room?.undo ?? null;
 
   const me = players.find((p) => p.player_id === myId) ?? null;
   const isHost = players.length > 0 && players[0].player_id === myId;
@@ -123,6 +129,27 @@ export default function YutRoom({ roomId }: { roomId: string }) {
     !me &&
     room?.status === "waiting" &&
     players.length < MAX_PLAYERS;
+
+  // 1:1 대국에서만 "상대"가 명확하므로, 접속 끊김 감지도 2인 대국으로 한정한다
+  const twoPlayerOpponent = players.length === 2 ? players.find((p) => p.player_id !== myId) ?? null : null;
+  const online = usePresence(supabase, roomId, myId);
+  const opponentOffline =
+    room?.status === "playing" &&
+    Boolean(me) &&
+    online.has(myId) &&
+    Boolean(twoPlayerOpponent && !online.has(twoPlayerOpponent.player_id));
+
+  const forceForfeit = useCallback(async () => {
+    if (!supabase || !room || !me) return;
+    const update = {
+      status: "finished" as const,
+      winner: myId,
+      current_turn: null as unknown as string,
+      finished_at: new Date().toISOString(),
+    };
+    setRoom((prev) => (prev ? ({ ...prev, ...update } as YutRoomRow) : prev));
+    await supabase.from("game_rooms").update(update).eq("id", roomId).eq("status", "playing");
+  }, [supabase, room, me, myId, roomId]);
 
   // ---------- 공통 커밋 (낙관적 반영 + 턴 가드) ----------
 
@@ -206,12 +233,13 @@ export default function YutRoom({ roomId }: { roomId: string }) {
     if (!myTurn || !state || state.throwsLeft <= 0) return;
     const { result, sticks } = throwSticks(rules);
     const st = applyThrow(state, myId, result, sticks);
-    await commit(resolveTurn(st));
-  }, [myTurn, state, rules, myId, commit, resolveTurn]);
+    // 던지기가 끼어들면 직전 "말 이동" 무르기는 되돌릴 상태가 어긋나므로 무효화한다
+    await commit({ ...resolveTurn(st), undo: { used: undo?.used ?? [] } });
+  }, [myTurn, state, rules, myId, commit, resolveTurn, undo]);
 
   const applyMoveTo = useCallback(
     async (target: number | "new", result: YutResult) => {
-      if (!myTurn || !state) return;
+      if (!myTurn || !state || !room) return;
       setSelectedTarget(null);
       let t: number | "new" = target;
       if (typeof target === "number") {
@@ -230,13 +258,62 @@ export default function YutRoom({ roomId }: { roomId: string }) {
           winner: myId,
           current_turn: null as unknown as string,
           finished_at: new Date().toISOString(),
+          undo: { used: undo?.used ?? [] },
         });
         return;
       }
-      await commit(resolveTurn(r.state));
+      // 이번 이동 직전 상태를 무르기용 스냅샷으로 저장 (대기 중이던 신청은 새 이동으로 무효화)
+      const snapshot = { state, current_turn: room.current_turn as string, by: myId };
+      await commit({ ...resolveTurn(r.state), undo: { used: undo?.used ?? [], snapshot } });
     },
-    [myTurn, state, myId, commit, resolveTurn],
+    [myTurn, state, myId, commit, resolveTurn, room, undo],
   );
+
+  // ---------- 무르기 (전원 동의 필요) ----------
+
+  const myUndoUsed = (undo?.used ?? []).includes(myId);
+  const canRequestUndo =
+    room?.status === "playing" &&
+    Boolean(me) &&
+    undo?.snapshot?.by === myId &&
+    !myUndoUsed &&
+    !undo?.by;
+  const undoApprovals = undo?.approvals ?? [];
+  const othersNeeded = Math.max(players.length - 1, 0);
+
+  const requestUndo = useCallback(async () => {
+    if (!supabase || !room || !me || !undo?.snapshot) return;
+    const value: YutUndoState = { ...undo, by: myId, approvals: [], declined: undefined };
+    setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
+    await supabase
+      .from("game_rooms")
+      .update({ undo: value })
+      .eq("id", roomId)
+      .eq("status", "playing");
+  }, [supabase, room, me, undo, myId, roomId]);
+
+  const approveUndo = useCallback(async () => {
+    if (!supabase || !room || !me || !undo?.by || !undo.snapshot) return;
+    const approvals = [...new Set([...(undo.approvals ?? []), myId])];
+    if (approvals.length >= othersNeeded) {
+      // 전원 동의 완료 → 직전 이동을 되돌린다
+      const value: YutUndoState = { used: [...(undo.used ?? []), undo.by] };
+      const update = { state: undo.snapshot.state, current_turn: undo.snapshot.current_turn, undo: value };
+      setRoom((prev) => (prev ? ({ ...prev, ...update } as YutRoomRow) : prev));
+      await supabase.from("game_rooms").update(update).eq("id", roomId);
+      return;
+    }
+    const value: YutUndoState = { ...undo, approvals };
+    setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
+    await supabase.from("game_rooms").update({ undo: value }).eq("id", roomId);
+  }, [supabase, room, me, undo, myId, roomId, othersNeeded]);
+
+  const declineUndo = useCallback(async () => {
+    if (!supabase || !room || !undo?.by) return;
+    const value: YutUndoState = { ...undo, by: undefined, approvals: [], declined: myId };
+    setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
+    await supabase.from("game_rooms").update({ undo: value }).eq("id", roomId);
+  }, [supabase, room, undo, roomId, myId]);
 
   /** 이 대상(판 위 노드 또는 새 말)에 적용 가능한 결과들 (중복 제거) */
   const applicableResultsFor = useCallback(
@@ -258,10 +335,14 @@ export default function YutRoom({ roomId }: { roomId: string }) {
     [state, myId],
   );
 
-  /** 말 클릭: 결과가 하나뿐이면 즉시 이동, 여러 개면 선택지 표시 */
+  /** 말 클릭: 결과가 하나뿐이면 즉시 이동, 여러 개면 이동 가능한 칸을 표시. 같은 말 재클릭 시 선택 취소 */
   const selectTarget = useCallback(
     (target: number | "new") => {
       if (!myTurn) return;
+      if (selectedTarget === target) {
+        setSelectedTarget(null);
+        return;
+      }
       const results = applicableResultsFor(target);
       if (results.length === 0) return;
       if (results.length === 1) {
@@ -270,7 +351,51 @@ export default function YutRoom({ roomId }: { roomId: string }) {
       }
       setSelectedTarget(target);
     },
-    [myTurn, applicableResultsFor, applyMoveTo],
+    [myTurn, selectedTarget, applicableResultsFor, applyMoveTo],
+  );
+
+  /** 선택된 말이 결과 r로 이동하면 도착할 노드 (완주는 참먹이 0번으로 표시) */
+  const destNodeFor = useCallback(
+    (target: number | "new", result: YutResult): number | null => {
+      const piece: YutPiece | undefined =
+        target === "new"
+          ? { pos: "ready", trail: [] }
+          : (state?.pieces[myId] ?? []).find(
+              (p) => typeof p.pos === "number" && p.pos === target,
+            );
+      if (!piece) return null;
+      const dest = computeDestination(piece, RESULT_STEPS[result]);
+      if (!dest) return null;
+      return dest.pos === "done" ? 0 : dest.pos;
+    },
+    [state, myId],
+  );
+
+  /** 현재 선택된 말이 이동 가능한 목적지 노드 → 결과 매핑 */
+  const moveTargetResults = useMemo(() => {
+    const map = new Map<number, YutResult>();
+    if (selectedTarget === null) return map;
+    for (const r of applicableResultsFor(selectedTarget)) {
+      const node = destNodeFor(selectedTarget, r);
+      if (node !== null) map.set(node, r);
+    }
+    return map;
+  }, [selectedTarget, applicableResultsFor, destNodeFor]);
+
+  const moveTargetLabels = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const [node, r] of moveTargetResults) map.set(node, YUT_RESULT_LABEL[r]);
+    return map;
+  }, [moveTargetResults]);
+
+  const handleMoveTargetClick = useCallback(
+    (node: number) => {
+      if (selectedTarget === null) return;
+      const r = moveTargetResults.get(node);
+      if (!r) return;
+      void applyMoveTo(selectedTarget, r);
+    },
+    [selectedTarget, moveTargetResults, applyMoveTo],
   );
 
   // 종료 시 기록 저장
@@ -345,7 +470,6 @@ export default function YutRoom({ roomId }: { roomId: string }) {
     }
   }
   const newPieceResults = myTurn && state ? applicableResultsFor("new") : [];
-  const targetResults = selectedTarget !== null ? applicableResultsFor(selectedTarget) : [];
   const winnerPlayer = players.find((p) => p.player_id === room.winner) ?? null;
   const turnPlayer = players.find((p) => p.player_id === room.current_turn) ?? null;
 
@@ -392,9 +516,17 @@ export default function YutRoom({ roomId }: { roomId: string }) {
                 ))}
               </div>
               <div className="throw-label text-center">
-                <p className="text-4xl font-bold text-vermil">
+                <p
+                  className={`text-4xl font-bold ${
+                    state.lastThrow.result === "nak" ? "text-mud" : "text-vermil"
+                  }`}
+                >
                   {YUT_RESULT_LABEL[state.lastThrow.result]}
+                  {state.lastThrow.result === "nak" ? "!" : ""}
                 </p>
+                {state.lastThrow.result === "nak" && (
+                  <p className="mt-0.5 font-plex text-[10px] text-mud">이번 던지기는 무효입니다</p>
+                )}
                 <p className="mt-1 font-plex text-[11px] text-mud">
                   {players.find((p) => p.player_id === state.lastThrow?.by)?.nickname}
                 </p>
@@ -449,9 +581,11 @@ export default function YutRoom({ roomId }: { roomId: string }) {
           <YutBoard
             pieces={state?.pieces ?? {}}
             order={state?.order ?? []}
-            selectableNodes={selectableNodes}
+            selectableNodes={selectedTarget === null ? selectableNodes : new Set<number>()}
             selectedNode={typeof selectedTarget === "number" ? selectedTarget : null}
+            moveTargets={moveTargetLabels}
             onNodeClick={(node) => selectTarget(node)}
+            onMoveTargetClick={handleMoveTargetClick}
           />
 
           <div className="mt-4 w-full">
@@ -463,6 +597,63 @@ export default function YutRoom({ roomId }: { roomId: string }) {
                   <p className="font-plex text-xs text-mud">
                     {turnPlayer?.nickname ?? "상대"}의 차례입니다
                   </p>
+                )}
+
+                {me && twoPlayerOpponent && opponentOffline && (
+                  <DisconnectBanner nickname={twoPlayerOpponent.nickname} onForfeit={forceForfeit} />
+                )}
+
+                {/* 무르기 — 신청자 본인 제외 전원의 동의가 필요 */}
+                {me && canRequestUndo && (
+                  <button
+                    onClick={requestUndo}
+                    className="mt-3 rounded border border-mud/40 px-4 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+                  >
+                    무르기 신청 (1회)
+                  </button>
+                )}
+                {me && undo?.by === myId && (
+                  <p className="mt-3 font-plex text-xs text-mud">
+                    무르기를 신청했습니다 — 동의 대기 중… ({undoApprovals.length}/{othersNeeded})
+                  </p>
+                )}
+                {me && undo?.by && undo.by !== myId && !undoApprovals.includes(myId) && (
+                  <div className="banner-in mt-3 rounded-lg border border-mud/30 bg-paper-deep px-4 py-3">
+                    <p className="text-sm">
+                      <span className="font-semibold">
+                        {players.find((p) => p.player_id === undo.by)?.nickname ?? "상대"}
+                      </span>
+                      님이 무르기를 신청했습니다 — 허용하시겠습니까?
+                    </p>
+                    <div className="mt-2 flex justify-center gap-2">
+                      <button
+                        onClick={approveUndo}
+                        className="rounded bg-vermil px-5 py-1.5 text-sm text-paper transition hover:opacity-85"
+                      >
+                        수락
+                      </button>
+                      <button
+                        onClick={declineUndo}
+                        className="rounded border border-mud/40 px-5 py-1.5 text-sm text-ink-soft transition hover:border-ink"
+                      >
+                        거절
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {me && undo?.by && undo.by !== myId && undoApprovals.includes(myId) && (
+                  <p className="mt-3 font-plex text-xs text-mud">
+                    동의했습니다 — 다른 참가자의 동의를 기다리는 중…
+                  </p>
+                )}
+                {me && undo?.declined && !undo?.by && (
+                  <p className="mt-3 font-plex text-xs text-mud">
+                    {players.find((p) => p.player_id === undo.declined)?.nickname ?? "상대"}
+                    님이 무르기를 거절했습니다.
+                  </p>
+                )}
+                {me && myUndoUsed && !undo?.by && (
+                  <p className="mt-1 font-plex text-[10px] text-mud/70">무르기를 이미 사용했습니다.</p>
                 )}
 
                 {myTurn && (
@@ -500,33 +691,17 @@ export default function YutRoom({ roomId }: { roomId: string }) {
                           </p>
                         )}
 
-                        {selectedTarget !== null && targetResults.length > 0 && (
-                          <div className="banner-in mt-3 rounded-lg border border-vermil/50 bg-paper px-4 py-3">
-                            <p className="text-sm font-semibold">
-                              {selectedTarget === "new"
-                                ? "새 말을 어떤 결과로 투입할까요?"
-                                : "이 말을 어떤 결과로 움직일까요?"}
+                        {selectedTarget !== null && moveTargetLabels.size > 0 && (
+                          <div className="banner-in mt-2 flex flex-col items-center gap-1.5">
+                            <p className="font-plex text-[11px] text-mud">
+                              판 위에 초록색으로 표시된 칸을 클릭해서 이동하세요
                             </p>
-                            <div className="mt-2 flex flex-wrap justify-center gap-2">
-                              {targetResults.map((r) => (
-                                <button
-                                  key={r}
-                                  onClick={() => applyMoveTo(selectedTarget, r)}
-                                  className="rounded-full border border-vermil bg-paper-deep px-5 py-2 text-base font-semibold text-vermil transition hover:bg-vermil hover:text-paper"
-                                >
-                                  {YUT_RESULT_LABEL[r]}
-                                  <span className="ml-1 font-plex text-[11px] opacity-70">
-                                    {RESULT_STEPS[r] > 0 ? `+${RESULT_STEPS[r]}칸` : "뒤로 1칸"}
-                                  </span>
-                                </button>
-                              ))}
-                              <button
-                                onClick={() => setSelectedTarget(null)}
-                                className="rounded-full border border-mud/40 px-4 py-2 text-sm text-ink-soft transition hover:border-ink"
-                              >
-                                취소
-                              </button>
-                            </div>
+                            <button
+                              onClick={() => setSelectedTarget(null)}
+                              className="rounded-full border border-mud/40 px-4 py-1.5 text-xs text-ink-soft transition hover:border-ink"
+                            >
+                              선택 취소
+                            </button>
                           </div>
                         )}
                       </div>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Board from "@/components/Board";
+import DisconnectBanner from "@/components/DisconnectBanner";
 import NicknameModal from "@/components/NicknameModal";
 import {
   applyMove,
@@ -16,6 +17,7 @@ import {
 } from "@/games/omok/logic";
 import { saveLocalRecord, saveServerRecord } from "@/lib/history";
 import { getPlayerId, getStoredNickname, storeNickname } from "@/lib/player";
+import { usePresence } from "@/lib/presence";
 import { getSupabase, type PlayerRow, type RoomRow } from "@/lib/supabase";
 
 const COLOR_LABEL = { b: "흑", w: "백" } as const;
@@ -112,6 +114,25 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
   const rematch = room?.rematch ?? null;
   const rules = room?.rules ?? DEFAULT_RULES;
   const undo = room?.undo ?? null;
+
+  // 상대 접속 끊김 감지 — online.has(myId)로 동기화 완료를 먼저 확인해야 오탐(false positive)이 없다
+  const online = usePresence(supabase, roomId, myId);
+  const opponentOffline =
+    room?.status === "playing" &&
+    Boolean(me) &&
+    online.has(myId) &&
+    Boolean(opponent && !online.has(opponent.player_id));
+
+  const forceForfeit = useCallback(async () => {
+    if (!supabase || !room || !me) return;
+    const update = {
+      status: "finished" as const,
+      winner: myId,
+      finished_at: new Date().toISOString(),
+    };
+    setRoom((prev) => (prev ? { ...prev, ...update } : prev));
+    await supabase.from("game_rooms").update(update).eq("id", roomId).eq("status", "playing");
+  }, [supabase, room, me, myId, roomId]);
 
   // 재대결 성사 → 새 방으로 이동
   useEffect(() => {
@@ -324,7 +345,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
   useEffect(() => {
     if (!room || room.status !== "finished" || !me) return;
     if (savedRef.current === room.id) return;
-    if (room.state.moves.length === 0) return;
     savedRef.current = room.id;
 
     const record = {
@@ -530,6 +550,10 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
               <p className="banner-in mt-2 font-plex text-xs text-vermil">{moveError}</p>
             )}
 
+            {me && opponent && opponentOffline && (
+              <DisconnectBanner nickname={opponent.nickname} onForfeit={forceForfeit} />
+            )}
+
             {/* 무르기 */}
             {me && canRequestUndo && (
               <button
@@ -548,7 +572,7 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
               <div className="banner-in mt-3 rounded-lg border border-mud/30 bg-paper-deep px-4 py-3">
                 <p className="text-sm">
                   <span className="font-semibold">{opponent?.nickname ?? "상대"}</span>
-                  님이 무르기를 신청했습니다.
+                  님이 무르기를 신청했습니다 — 허용하시겠습니까?
                 </p>
                 <div className="mt-2 flex justify-center gap-2">
                   <button

@@ -14,6 +14,8 @@
 export const FINISH = -1;
 
 export type YutResult = "backdo" | "do" | "gae" | "geol" | "yut" | "mo";
+/** 던지기 결과 + 낙(무효) */
+export type ThrowOutcome = YutResult | "nak";
 
 export const RESULT_STEPS: Record<YutResult, number> = {
   backdo: -1,
@@ -24,14 +26,22 @@ export const RESULT_STEPS: Record<YutResult, number> = {
   mo: 5,
 };
 
-export const YUT_RESULT_LABEL: Record<YutResult, string> = {
+export const YUT_RESULT_LABEL: Record<ThrowOutcome, string> = {
   backdo: "빽도",
   do: "도",
   gae: "개",
   geol: "걸",
   yut: "윷",
   mo: "모",
+  nak: "낙",
 };
+
+/** 가락 하나가 배(평평한 면)로 떨어질 확률. 0.5보다 살짝 높여 윷:모 결과 비율이 6:4가 되도록 함 */
+const STICK_FLAT_PROB = 0.525;
+
+/** 던질 때마다 이 범위 안에서 낙(무효) 확률을 새로 뽑는다 */
+const NAK_MIN_CHANCE = 0.01;
+const NAK_MAX_CHANCE = 0.05;
 
 /** 윷·모는 한 번 더 던진다 */
 export function grantsExtraThrow(result: YutResult): boolean {
@@ -63,7 +73,18 @@ export interface YutState {
   /** 현재 턴 플레이어가 남은 던지기 횟수 */
   throwsLeft: number;
   /** 마지막 던지기 (연출용) */
-  lastThrow: { by: string; result: YutResult; sticks: boolean[]; at: number } | null;
+  lastThrow: { by: string; result: ThrowOutcome; sticks: boolean[]; at: number } | null;
+}
+
+/** 무르기(말 이동 취소) 상태 — 상대(2인) 또는 전원(3~4인)의 동의가 필요 */
+export interface YutUndoState {
+  by?: string; // 무르기를 신청한 player_id
+  /** 신청을 승인한 player_id 목록 (신청자 본인 제외 전원이 모여야 실행됨) */
+  approvals?: string[];
+  declined?: string; // 거절한 player_id
+  used?: string[]; // 무르기를 이미 사용한 player_id 목록 (1인당 1회)
+  /** 직전 "말 이동" 이전 상태 — 여기로 되돌린다. 이후 던지기/이동이 발생하면 무효화됨 */
+  snapshot?: { state: YutState; current_turn: string; by: string } | null;
 }
 
 export function createYutState(order: string[], rules: YutRules): YutState {
@@ -80,12 +101,17 @@ export function createYutState(order: string[], rules: YutRules): YutState {
 /**
  * 윷가락 4개 던지기. sticks[i] = true → 배(평평한 면).
  * 빽도 규칙 사용 시 0번 가락에 표식이 있다고 가정: 배가 딱 하나이고 그게 0번이면 빽도.
+ * 매 던지기마다 1~5% 사이에서 새로 확률을 뽑아 낙(무효)이 날 수 있다.
  */
 export function throwSticks(
   rules: YutRules,
   rand: () => number = Math.random,
-): { result: YutResult; sticks: boolean[] } {
-  const sticks = Array.from({ length: 4 }, () => rand() < 0.5);
+): { result: ThrowOutcome; sticks: boolean[] } {
+  const sticks = Array.from({ length: 4 }, () => rand() < STICK_FLAT_PROB);
+  const nakChance = NAK_MIN_CHANCE + rand() * (NAK_MAX_CHANCE - NAK_MIN_CHANCE);
+  if (rand() < nakChance) {
+    return { result: "nak", sticks };
+  }
   const flats = sticks.filter(Boolean).length;
   let result: YutResult;
   if (flats === 0) result = "mo";
@@ -96,14 +122,17 @@ export function throwSticks(
   return { result, sticks };
 }
 
-/** 던진 결과를 대기열에 반영 */
+/** 던진 결과를 대기열에 반영. 낙이면 이번 던지기만 소모되고 대기열엔 아무것도 쌓이지 않는다 */
 export function applyThrow(
   state: YutState,
   by: string,
-  result: YutResult,
+  result: ThrowOutcome,
   sticks: boolean[],
   at: number = Date.now(),
 ): YutState {
+  if (result === "nak") {
+    return { ...state, throwsLeft: state.throwsLeft - 1, lastThrow: { by, result, sticks, at } };
+  }
   return {
     ...state,
     pending: [...state.pending, result],

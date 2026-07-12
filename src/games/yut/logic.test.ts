@@ -45,6 +45,23 @@ describe("던지기", () => {
     ).toBe("do");
   });
 
+  it("낮은 확률로 낙(무효)이 나올 수 있다", () => {
+    const seq = (vals: number[]) => {
+      let i = 0;
+      return () => vals[i++];
+    };
+    // 가락 4개(0.9x4) 뽑은 뒤 낙 확률 계산용 0, 낙 여부 판정용 0 → 반드시 낙
+    const { result } = throwSticks(DEFAULT_YUT_RULES, seq([0.9, 0.9, 0.9, 0.9, 0, 0]));
+    expect(result).toBe("nak");
+  });
+
+  it("낙은 대기열에 쌓이지 않고 이번 던지기만 소모한다", () => {
+    let s = fresh();
+    s = applyThrow(s, P1, "nak", [true, false, true, false]);
+    expect(s.pending).toEqual([]);
+    expect(s.throwsLeft).toBe(0);
+  });
+
   it("윷/모는 던질 기회가 하나 더", () => {
     let s = fresh();
     s = applyThrow(s, P1, "yut", [true, true, true, true]);
