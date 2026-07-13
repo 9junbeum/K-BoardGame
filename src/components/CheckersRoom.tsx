@@ -3,44 +3,68 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Board from "@/components/Board";
+import CheckersBoard from "@/components/CheckersBoard";
 import DisconnectBanner from "@/components/DisconnectBanner";
 import KakaoAdFit from "@/components/KakaoAdFit";
 import NicknameModal from "@/components/NicknameModal";
 import RulesModal from "@/components/RulesModal";
 import {
-  applyMove,
-  boardFromMoves,
-  checkWin,
-  DEFAULT_RULES,
-  isForbiddenMove,
-  nextColor,
-  type StoneColor,
-} from "@/games/omok/logic";
+  applyPath,
+  createCheckersState,
+  DEFAULT_CHECKERS_RULES,
+  deriveCheckers,
+  type CheckersRules,
+  type GameState,
+  type PieceColor,
+  type Point,
+} from "@/games/checkers/logic";
 import { saveLocalRecord, saveServerRecord } from "@/lib/history";
 import { getPlayerId, getStoredNickname, storeNickname } from "@/lib/player";
 import { usePresence } from "@/lib/presence";
-import { getSupabase, type PlayerRow, type RoomRow } from "@/lib/supabase";
+import { getSupabase, type PlayerRow } from "@/lib/supabase";
 import { useRulesModal } from "@/lib/useRulesModal";
 import { useTurnNotification } from "@/lib/useTurnNotification";
 
 const COLOR_LABEL = { b: "흑", w: "백" } as const;
 
-export default function OmokRoom({ roomId }: { roomId: string }) {
+interface CheckersUndoState {
+  by?: string;
+  declined?: string;
+  used?: string[];
+}
+
+interface CheckersRematchState {
+  by?: string;
+  declined?: boolean;
+  next_room_id?: string;
+}
+
+interface CheckersRoomRow {
+  id: string;
+  game_type: string;
+  status: "waiting" | "playing" | "finished";
+  state: GameState;
+  current_turn: string | null;
+  winner: string | null;
+  rules: Partial<CheckersRules> | null;
+  undo: CheckersUndoState | null;
+  rematch: CheckersRematchState | null;
+  finished_at: string | null;
+}
+
+export default function CheckersRoom({ roomId }: { roomId: string }) {
   const router = useRouter();
   const supabase = useMemo(() => getSupabase(), []);
 
   const [myId, setMyId] = useState("");
-  const [room, setRoom] = useState<RoomRow | null>(null);
+  const [room, setRoom] = useState<CheckersRoomRow | null>(null);
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [moveError, setMoveError] = useState<string | null>(null);
-  const savedRef = useRef<string | null>(null); // 기록 저장을 마친 room id
-  const rulesModal = useRulesModal("omok");
+  const savedRef = useRef<string | null>(null);
+  const rulesModal = useRulesModal("checkers");
 
-  // roomId가 바뀌면(재대결 등) 렌더 단계에서 상태 리셋 — React 권장 패턴
   const [prevRoomId, setPrevRoomId] = useState(roomId);
   if (prevRoomId !== roomId) {
     setPrevRoomId(roomId);
@@ -48,7 +72,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
     setPlayers([]);
     setLoaded(false);
     setNotFound(false);
-    setMoveError(null);
   }
 
   useEffect(() => {
@@ -71,7 +94,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
     if (data) setPlayers(data as PlayerRow[]);
   }, [supabase, roomId]);
 
-  // 초기 로드 + Realtime 구독
   useEffect(() => {
     if (!supabase || !roomId) return;
     let cancelled = false;
@@ -86,7 +108,7 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
       if (!data) {
         setNotFound(true);
       } else {
-        setRoom(data as RoomRow);
+        setRoom(data as CheckersRoomRow);
         await fetchPlayers();
       }
       setLoaded(true);
@@ -97,7 +119,7 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "game_rooms", filter: `id=eq.${roomId}` },
-        (payload) => setRoom(payload.new as RoomRow),
+        (payload) => setRoom(payload.new as CheckersRoomRow),
       )
       .on(
         "postgres_changes",
@@ -117,10 +139,15 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
   const isSpectator = loaded && !me && players.length >= 2;
   const needJoin = loaded && Boolean(room) && myId !== "" && !me && players.length < 2;
   const rematch = room?.rematch ?? null;
-  const rules = room?.rules ?? DEFAULT_RULES;
+  const rules: CheckersRules = useMemo(
+    () => ({ ...DEFAULT_CHECKERS_RULES, ...(room?.rules ?? {}) }),
+    [room?.rules],
+  );
   const undo = room?.undo ?? null;
+  const state: GameState = room?.state ?? createCheckersState();
+  const derived = useMemo(() => deriveCheckers(state.moves), [state.moves]);
+  const board = derived.board;
 
-  // 상대 접속 끊김 감지 — online.has(myId)로 동기화 완료를 먼저 확인해야 오탐(false positive)이 없다
   const online = usePresence(supabase, roomId, myId);
   const opponentOffline =
     room?.status === "playing" &&
@@ -141,7 +168,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
     await supabase.from("game_rooms").update(update).eq("id", roomId).eq("status", "playing");
   }, [supabase, room, me, myId, roomId]);
 
-  // 재대결 성사 → 새 방으로 이동
   useEffect(() => {
     const nextId = rematch?.next_room_id;
     if (nextId && me) {
@@ -149,14 +175,12 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
     }
   }, [rematch?.next_room_id, me, router]);
 
-  // 방 참가
   const join = useCallback(
     async (nickname: string) => {
       if (!supabase || !room) return;
       storeNickname(nickname);
-      let color: StoneColor;
+      let color: PieceColor;
       if (players.length === 0) {
-        // 방장(첫 입장자) 색 = 선공 규칙 적용
         color =
           rules.firstMove === "host" ? "b"
           : rules.firstMove === "guest" ? "w"
@@ -174,7 +198,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
         await fetchPlayers();
         return;
       }
-      // 두 번째 참가자가 게임을 시작 상태로 전환
       if (players.length === 1) {
         const black = players[0].color === "b" ? players[0].player_id : myId;
         await supabase
@@ -188,70 +211,65 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
     [supabase, room, players, roomId, myId, fetchPlayers, rules],
   );
 
-  // 착수
-  const place = useCallback(
-    async (x: number, y: number) => {
+  // ---------- 착수(단순 이동 또는 완성된 연속 잡기 경로) ----------
+
+  const move = useCallback(
+    async (path: Point[]) => {
       if (!supabase || !room || !me || room.status !== "playing") return;
       if (room.current_turn !== myId) return;
-      if (me.color !== nextColor(room.state.moves)) return;
+      const r = applyPath(state, me.color as PieceColor, path);
+      if (!r) return; // 유효한 수만 클릭되므로 정상 진행 시 발생하지 않음
+      const d = deriveCheckers(r.state.moves);
 
-      if (isForbiddenMove(room.state, x, y, rules)) {
-        setMoveError("삼삼(3×3) 금지 — 열린 3이 두 개 생기는 자리입니다.");
-        setTimeout(() => setMoveError(null), 2200);
-        return;
-      }
-      const r = applyMove(room.state, x, y, rules);
-      if (!r) return;
-
-      const finished = Boolean(r.win) || r.draw;
-      const update = {
-        state: r.state,
-        current_turn: finished ? null : opponent?.player_id ?? null,
-        undo: { used: undo?.used ?? [] }, // 대기 중인 무르기 신청은 착수로 무효화
-        ...(finished && {
-          status: "finished" as const,
-          winner: r.draw ? "draw" : myId,
+      let update: Partial<CheckersRoomRow>;
+      if (d.gameOver) {
+        const winnerColor = d.winner;
+        const winnerId = players.find((p) => p.color === winnerColor)?.player_id ?? "draw";
+        update = {
+          state: r.state,
+          status: "finished",
+          winner: winnerId,
           finished_at: new Date().toISOString(),
-        }),
-      };
+          undo: { used: undo?.used ?? [] },
+        };
+      } else {
+        update = {
+          state: r.state,
+          current_turn: players.find((p) => p.color === d.toMove)?.player_id ?? null,
+          undo: { used: undo?.used ?? [] },
+        };
+      }
 
-      // 낙관적 반영
-      setRoom((prev) => (prev ? { ...prev, ...update } : prev));
-
+      setRoom((prev) => (prev ? ({ ...prev, ...update } as CheckersRoomRow) : prev));
       const { data, error } = await supabase
         .from("game_rooms")
         .update(update)
         .eq("id", roomId)
-        .eq("current_turn", myId) // 최소한의 턴 검증
+        .eq("current_turn", myId)
         .select("id");
-
       if (error || !data || data.length === 0) {
-        // 실패 시 서버 상태로 복구
-        const { data: fresh } = await supabase
-          .from("game_rooms")
-          .select("*")
-          .eq("id", roomId)
-          .maybeSingle();
-        if (fresh) setRoom(fresh as RoomRow);
+        const { data: fresh } = await supabase.from("game_rooms").select("*").eq("id", roomId).maybeSingle();
+        if (fresh) setRoom(fresh as CheckersRoomRow);
       }
     },
-    [supabase, room, me, opponent, myId, roomId, rules, undo],
+    [supabase, room, me, myId, roomId, undo, state, players],
   );
 
   // ---------- 무르기 ----------
 
-  const lastMoveColor = room?.state.moves.at(-1)?.c ?? null;
+  const lastMove = state.moves.at(-1) ?? null;
   const undoUsedByMe = (undo?.used ?? []).includes(myId);
   const canRequestUndo =
     room?.status === "playing" &&
     Boolean(me) &&
-    lastMoveColor === me?.color &&
+    lastMove !== null &&
+    lastMove.color === me?.color &&
     !undoUsedByMe &&
     !undo?.by;
 
   const requestUndo = useCallback(async () => {
     if (!supabase || !room || !me || !opponent) return;
-    const value = { ...(undo ?? {}), by: myId, declined: undefined };
+    const value: CheckersUndoState = { ...(undo ?? {}), by: myId, declined: undefined };
     setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
     await supabase
       .from("game_rooms")
@@ -263,20 +281,21 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
 
   const acceptUndo = useCallback(async () => {
     if (!supabase || !room || !me || !undo?.by) return;
-    const moves = room.state.moves.slice(0, -1);
-    const value = { used: [...(undo.used ?? []), undo.by] };
-    const update = { state: { moves }, current_turn: undo.by, undo: value };
-    setRoom((prev) => (prev ? { ...prev, ...update } : prev));
-    await supabase
-      .from("game_rooms")
-      .update(update)
-      .eq("id", roomId)
-      .eq("current_turn", myId); // 내 차례일 때만 (동시성 가드)
-  }, [supabase, room, me, undo, myId, roomId]);
+    const moves = state.moves.slice(0, -1);
+    const d = deriveCheckers(moves);
+    const value: CheckersUndoState = { used: [...(undo.used ?? []), undo.by] };
+    const update = {
+      state: { moves },
+      current_turn: players.find((p) => p.color === d.toMove)?.player_id ?? null,
+      undo: value,
+    };
+    setRoom((prev) => (prev ? ({ ...prev, ...update } as CheckersRoomRow) : prev));
+    await supabase.from("game_rooms").update(update).eq("id", roomId).eq("current_turn", myId);
+  }, [supabase, room, me, undo, myId, roomId, state, players]);
 
   const declineUndo = useCallback(async () => {
     if (!supabase || !room || !undo?.by) return;
-    const value = { used: undo.used ?? [], declined: undo.by };
+    const value: CheckersUndoState = { used: undo.used ?? [], declined: undo.by };
     setRoom((prev) => (prev ? { ...prev, undo: value } : prev));
     await supabase.from("game_rooms").update({ undo: value }).eq("id", roomId);
   }, [supabase, room, undo, roomId]);
@@ -303,19 +322,18 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
 
   const acceptRematch = useCallback(async () => {
     if (!supabase || !room || !me || !opponent || !rematch) return;
-    // 색 교대: 이전 판의 흑 ↔ 백
-    const myNewColor: StoneColor = me.color === "b" ? "w" : "b";
-    const oppNewColor: StoneColor = opponent.color === "b" ? "w" : "b";
+    const myNewColor: PieceColor = me.color === "b" ? "w" : "b";
+    const oppNewColor: PieceColor = opponent.color === "b" ? "w" : "b";
     const blackId = myNewColor === "b" ? me.player_id : opponent.player_id;
 
     const { data: newRoom, error } = await supabase
       .from("game_rooms")
       .insert({
-        game_type: "omok",
+        game_type: "checkers",
         status: "playing",
-        state: { moves: [] },
+        state: createCheckersState(),
         current_turn: blackId,
-        rules: room.rules ?? DEFAULT_RULES,
+        rules: room.rules ?? DEFAULT_CHECKERS_RULES,
         undo: null,
       })
       .select("id")
@@ -339,7 +357,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
       },
     ]);
 
-    // 상대에게 새 방을 알림
     await supabase
       .from("game_rooms")
       .update({ rematch: { ...rematch, next_room_id: newRoom.id } })
@@ -348,7 +365,7 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
     router.push(`/room/${newRoom.id}`);
   }, [supabase, room, me, opponent, rematch, roomId, router]);
 
-  // 종료 시 기록 저장 (플레이어만, 방마다 1회)
+  // 종료 시 기록 저장
   useEffect(() => {
     if (!room || room.status !== "finished" || !me) return;
     if (savedRef.current === room.id) return;
@@ -356,13 +373,13 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
 
     const record = {
       roomId: room.id,
-      gameType: "omok" as const,
+      gameType: "checkers" as const,
       result:
         room.winner === "draw" ? ("draw" as const)
         : room.winner === myId ? ("win" as const)
         : ("lose" as const),
       opponentNickname: opponent?.nickname ?? "?",
-      moves: room.state.moves,
+      moves: state.moves,
     };
 
     (async () => {
@@ -378,7 +395,7 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
       }
       saveLocalRecord(record);
     })();
-  }, [room, me, opponent, myId, supabase]);
+  }, [room, me, opponent, myId, supabase, state.moves]);
 
   const copyLink = useCallback(() => {
     const url = window.location.href;
@@ -390,7 +407,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
       navigator.clipboard.writeText(url).then(markCopied);
       return;
     }
-    // 비보안 컨텍스트(http + LAN IP) 폴백
     const ta = document.createElement("textarea");
     ta.value = url;
     ta.style.position = "fixed";
@@ -416,11 +432,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
         <p className="mt-2 text-center font-plex text-xs text-mud">
           .env.local 에 NEXT_PUBLIC_SUPABASE_URL / ANON_KEY를 넣고 재시작하세요.
         </p>
-        <div className="mt-6 text-center">
-          <Link href="/room/local" className="text-vermil underline underline-offset-4">
-            같은 화면 대국으로 이동
-          </Link>
-        </div>
       </Shell>
     );
   }
@@ -446,18 +457,9 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
     );
   }
 
-  const board = boardFromMoves(room.state.moves);
-  const lastMove = room.state.moves.at(-1) ?? null;
   const finished = room.status === "finished";
   const myTurn = room.status === "playing" && room.current_turn === myId;
   const winnerPlayer = players.find((p) => p.player_id === room.winner) ?? null;
-
-  // 승리 라인 재계산 (마지막 착수 기준)
-  const winLine =
-    finished && room.winner !== "draw" && lastMove
-      ? (checkWin(board, lastMove.x, lastMove.y)?.line ?? null)
-      : null;
-
   const rematchPending = rematch && !rematch.declined && !rematch.next_room_id;
 
   return (
@@ -470,11 +472,6 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
           ← 로비로
         </Link>
         <div className="flex items-center gap-2">
-          {rules.forbidDoubleThree && (
-            <span className="rounded-full border border-vermil/50 px-2.5 py-1 font-plex text-[10px] text-vermil">
-              삼삼 금지
-            </span>
-          )}
           <button
             onClick={rulesModal.reopen}
             className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
@@ -491,11 +488,10 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
       </header>
 
       {/* 플레이어 패널 */}
-      <div className="mb-4 flex w-full max-w-[590px] items-center justify-between gap-2">
+      <div className="mb-4 flex w-full max-w-[520px] items-center justify-between gap-2">
         {(["b", "w"] as const).map((c) => {
           const p = players.find((pl) => pl.color === c) ?? null;
-          const isTurn =
-            room.status === "playing" && p && room.current_turn === p.player_id;
+          const isTurn = room.status === "playing" && p && room.current_turn === p.player_id;
           return (
             <div
               key={c}
@@ -517,7 +513,7 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
                 </p>
                 <p className="font-plex text-[10px] text-mud">
                   {COLOR_LABEL[c]}
-                  {isTurn ? " · 차례" : ""}
+                  {isTurn ? " · 차례" : ""} · 말 {derived.counts[c]}
                 </p>
               </div>
             </div>
@@ -525,16 +521,15 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
         })}
       </div>
 
-      <Board
+      <CheckersBoard
         board={board}
-        lastMove={lastMove}
-        winLine={winLine}
-        previewColor={myTurn && me ? (me.color as StoneColor) : null}
-        onPlace={place}
+        legalStarts={myTurn ? derived.legalStarts : []}
+        interactive={Boolean(myTurn)}
+        onMove={(path) => void move(path)}
       />
 
       {/* 상태 배너 */}
-      <div className="mt-5 w-full max-w-[590px]">
+      <div className="mt-5 w-full max-w-[520px]">
         {room.status === "waiting" && (
           <div className="banner-in rounded-lg border border-mud/30 bg-paper-deep px-6 py-4 text-center">
             <p className="font-semibold">친구를 기다리는 중입니다</p>
@@ -556,12 +551,11 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
               {isSpectator
                 ? "관전 중입니다"
                 : myTurn
-                  ? "당신 차례입니다 — 원하는 자리를 클릭하세요"
+                  ? derived.forcedCapture
+                    ? "당신 차례입니다 — 잡을 수 있는 말이 있으면 반드시 잡아야 합니다"
+                    : "당신 차례입니다 — 말을 클릭해 이동하세요"
                   : `${opponent?.nickname ?? "상대"}의 차례입니다`}
             </p>
-            {moveError && (
-              <p className="banner-in mt-2 font-plex text-xs text-vermil">{moveError}</p>
-            )}
 
             {me && opponent && opponentOffline && (
               <DisconnectBanner nickname={opponent.nickname} onForfeit={forceForfeit} />
@@ -622,7 +616,7 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
                   : `${winnerPlayer?.nickname ?? "상대"} 승리`}
             </p>
             <p className="mt-1 font-plex text-xs text-mud">
-              {room.state.moves.length}수 · 기록이 저장되었습니다
+              흑 {derived.counts.b} : 백 {derived.counts.w} · 기록이 저장되었습니다
             </p>
 
             {/* 재대결 */}
@@ -711,10 +705,10 @@ export default function OmokRoom({ roomId }: { roomId: string }) {
       <NicknameModal
         open={needJoin}
         defaultValue={typeof window !== "undefined" ? getStoredNickname() : ""}
-        title={players.length === 0 ? "방을 만들었습니다 — 닉네임 입력" : "대국에 참가합니다 — 닉네임 입력"}
+        title={players.length === 0 ? "체커 방을 만들었습니다 — 닉네임 입력" : "대국에 참가합니다 — 닉네임 입력"}
         onSubmit={join}
       />
-      <RulesModal open={rulesModal.open} gameType="omok" onClose={rulesModal.close} />
+      <RulesModal open={rulesModal.open} gameType="checkers" onClose={rulesModal.close} />
     </Shell>
   );
 }

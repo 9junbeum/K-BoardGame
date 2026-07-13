@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { DEFAULT_CHECKERS_RULES, type CheckersRules } from "@/games/checkers/logic";
 import type { FirstMove } from "@/games/omok/logic";
-import { DEFAULT_SAGMOK_RULES, type SagmokRules } from "@/games/sagmok/logic";
 
 interface Props {
   open: boolean;
   creating?: boolean;
-  onCreate: (rules: SagmokRules) => void;
+  onCreate: (rules: CheckersRules) => void;
   onClose: () => void;
 }
 
@@ -18,8 +18,8 @@ const FIRST_MOVE_OPTIONS: { value: FirstMove; label: string; desc: string }[] = 
   { value: "guest", label: "상대", desc: "참가자가 흑" },
 ];
 
-export default function SagmokSettingsModal({ open, creating, onCreate, onClose }: Props) {
-  const [firstMove, setFirstMove] = useState<FirstMove>(DEFAULT_SAGMOK_RULES.firstMove);
+export default function CheckersSettingsModal({ open, creating, onCreate, onClose }: Props) {
+  const [firstMove, setFirstMove] = useState<FirstMove>(DEFAULT_CHECKERS_RULES.firstMove);
 
   if (!open) return null;
 
@@ -29,8 +29,8 @@ export default function SagmokSettingsModal({ open, creating, onCreate, onClose 
         className="banner-in w-full max-w-sm rounded-lg border border-mud/30 bg-paper p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-lg font-semibold">사목 설정</h2>
-        <p className="mt-1 font-plex text-xs text-mud">7×6판 · 아래서부터 쌓이는 4목</p>
+        <h2 className="text-lg font-semibold">체커 설정</h2>
+        <p className="mt-1 font-plex text-xs text-mud">8×8판 · 강제 잡기 · 연속 잡기 · 킹 승격</p>
 
         {/* 흑선 */}
         <div className="mt-5">
@@ -61,7 +61,7 @@ export default function SagmokSettingsModal({ open, creating, onCreate, onClose 
             취소
           </button>
           <Link
-            href="/room/local/sagmok"
+            href="/room/local/checkers"
             className="flex-1 rounded border border-mud/40 px-4 py-2.5 text-center text-sm text-ink-soft transition hover:border-ink"
           >
             같은 화면

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import {
   COLS,
   dropRow,
@@ -36,12 +36,40 @@ interface SagmokBoardProps {
 export default function SagmokBoard({ board, lastMove, winLine, previewColor, onDrop }: SagmokBoardProps) {
   const [hoverCol, setHoverCol] = useState<number | null>(null);
   const [selectedCol, setSelectedCol] = useState<number | null>(null);
+  const [kbCol, setKbCol] = useState<number | null>(null);
   const coarse = useCoarsePointer();
 
   const winSet = new Set((winLine ?? []).map((p) => idx(p.x, p.y)));
   const interactive = Boolean(previewColor && onDrop);
-  const previewCol = coarse ? selectedCol : hoverCol;
+  const previewCol = kbCol ?? (coarse ? selectedCol : hoverCol);
   const previewRow = previewCol !== null ? dropRow(board, previewCol) : null;
+
+  const onKeyDown = (e: KeyboardEvent<SVGSVGElement>) => {
+    if (!interactive) return;
+    switch (e.key) {
+      case "ArrowLeft":
+        e.preventDefault();
+        setKbCol((c) => Math.max(0, (c ?? Math.floor(COLS / 2)) - 1));
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        setKbCol((c) => Math.min(COLS - 1, (c ?? Math.floor(COLS / 2)) + 1));
+        break;
+      case "Enter":
+      case " ":
+      case "ArrowDown":
+        e.preventDefault();
+        setKbCol((c) => {
+          const col = c ?? Math.floor(COLS / 2);
+          if (dropRow(board, col) !== null) onDrop?.(col);
+          return col;
+        });
+        break;
+      case "Escape":
+        setKbCol(null);
+        break;
+    }
+  };
 
   // 착수 가능 여부가 바뀌거나(내 차례가 아니게 됨) 판이 바뀌면(수가 두어짐) 대기 중인 선택을 지운다
   const [prevBoard, setPrevBoard] = useState(board);
@@ -50,16 +78,19 @@ export default function SagmokBoard({ board, lastMove, winLine, previewColor, on
     setPrevBoard(board);
     setPrevInteractive(interactive);
     setSelectedCol(null);
+    setKbCol(null);
   }
 
   return (
     <>
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full max-w-[560px] select-none rounded-lg shadow-[0_10px_30px_rgba(26,22,20,0.25)]"
+        className="w-full max-w-[560px] select-none rounded-lg shadow-[0_10px_30px_rgba(26,22,20,0.25)] focus:outline-none focus-visible:ring-2 focus-visible:ring-vermil"
         onMouseLeave={() => setHoverCol(null)}
+        onKeyDown={onKeyDown}
+        tabIndex={interactive ? 0 : -1}
         role="img"
-        aria-label="사목판"
+        aria-label="사목판 — 좌우 화살표로 열 이동, Enter/Space/아래 화살표로 떨어뜨리기"
       >
         <defs>
           <linearGradient id="sg-wood" x1="0" y1="0" x2="1" y2="1">
@@ -164,6 +195,12 @@ export default function SagmokBoard({ board, lastMove, winLine, previewColor, on
             );
           })}
       </svg>
+
+      {!coarse && interactive && (
+        <p className="mt-1.5 font-plex text-[10px] text-mud">
+          키보드: 좌우 화살표로 열 이동 · Enter/Space로 떨어뜨리기
+        </p>
+      )}
 
       {coarse && interactive && selectedCol !== null && (
         <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center gap-2 border-t border-mud/30 bg-paper/95 p-3 shadow-[0_-4px_16px_rgba(26,22,20,0.15)] backdrop-blur">

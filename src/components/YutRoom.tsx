@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import DisconnectBanner from "@/components/DisconnectBanner";
+import KakaoAdFit from "@/components/KakaoAdFit";
 import NicknameModal from "@/components/NicknameModal";
+import RulesModal from "@/components/RulesModal";
 import YutBoard, { PLAYER_COLORS } from "@/components/YutBoard";
 import {
   applyThrow,
@@ -27,6 +29,8 @@ import { saveLocalRecord, saveServerRecord } from "@/lib/history";
 import { getPlayerId, getStoredNickname, storeNickname } from "@/lib/player";
 import { usePresence } from "@/lib/presence";
 import { getSupabase, type PlayerRow } from "@/lib/supabase";
+import { useRulesModal } from "@/lib/useRulesModal";
+import { useTurnNotification } from "@/lib/useTurnNotification";
 
 const MAX_PLAYERS = 4;
 
@@ -52,6 +56,7 @@ export default function YutRoom({ roomId }: { roomId: string }) {
   const [copied, setCopied] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState<number | "new" | null>(null);
   const savedRef = useRef<string | null>(null);
+  const rulesModal = useRulesModal("yut");
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +127,7 @@ export default function YutRoom({ roomId }: { roomId: string }) {
   const me = players.find((p) => p.player_id === myId) ?? null;
   const isHost = players.length > 0 && players[0].player_id === myId;
   const myTurn = room?.status === "playing" && room.current_turn === myId && Boolean(state);
+  useTurnNotification(Boolean(myTurn));
   const needJoin =
     loaded &&
     Boolean(room) &&
@@ -487,6 +493,12 @@ export default function YutRoom({ roomId }: { roomId: string }) {
             말 {rules.pieceCount}개{rules.backdo ? " · 빽도" : ""}
           </span>
           <button
+            onClick={rulesModal.reopen}
+            className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+          >
+            규칙 보기
+          </button>
+          <button
             onClick={copyLink}
             className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
           >
@@ -819,6 +831,10 @@ export default function YutRoom({ roomId }: { roomId: string }) {
         </aside>
       </div>
 
+      <div className="mt-8 w-full">
+        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
+      </div>
+
       <NicknameModal
         open={Boolean(needJoin)}
         defaultValue={typeof window !== "undefined" ? getStoredNickname() : ""}
@@ -829,6 +845,7 @@ export default function YutRoom({ roomId }: { roomId: string }) {
         }
         onSubmit={join}
       />
+      <RulesModal open={rulesModal.open} gameType="yut" onClose={rulesModal.close} />
     </Shell>
   );
 }

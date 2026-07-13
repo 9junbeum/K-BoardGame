@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { DEFAULT_RULES, type FirstMove, type Rules } from "@/games/omok/logic";
 
 interface Props {
@@ -75,6 +76,12 @@ export default function RoomSettingsModal({ open, creating, onCreate, onClose }:
           >
             취소
           </button>
+          <Link
+            href="/room/local"
+            className="flex-1 rounded border border-mud/40 px-4 py-2.5 text-center text-sm text-ink-soft transition hover:border-ink"
+          >
+            같은 화면
+          </Link>
           <button
             onClick={() => onCreate({ forbidDoubleThree, firstMove })}
             disabled={creating}

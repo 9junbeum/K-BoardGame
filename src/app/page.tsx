@@ -1,15 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
+import CheckersSettingsModal from "@/components/CheckersSettingsModal";
 import GoSettingsModal from "@/components/GoSettingsModal";
 import HistoryList from "@/components/HistoryList";
+import KakaoAdFit from "@/components/KakaoAdFit";
 import MemorySettingsModal from "@/components/MemorySettingsModal";
 import OthelloSettingsModal from "@/components/OthelloSettingsModal";
 import RoomSettingsModal from "@/components/RoomSettingsModal";
 import SagmokSettingsModal from "@/components/SagmokSettingsModal";
 import YutSettingsModal from "@/components/YutSettingsModal";
+import { createCheckersState, type CheckersRules } from "@/games/checkers/logic";
 import { createGoState, type GoRules } from "@/games/go/logic";
 import { createMemoryState, type MemoryRules } from "@/games/memory/logic";
 import type { Rules } from "@/games/omok/logic";
@@ -30,6 +34,7 @@ export default function LobbyPage() {
   const [showOthelloSettings, setShowOthelloSettings] = useState(false);
   const [showSagmokSettings, setShowSagmokSettings] = useState(false);
   const [showMemorySettings, setShowMemorySettings] = useState(false);
+  const [showCheckersSettings, setShowCheckersSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 인증 상태 구독
@@ -199,6 +204,27 @@ export default function LobbyPage() {
     [router],
   );
 
+  const createCheckersRoom = useCallback(
+    async (rules: CheckersRules) => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      setCreating(true);
+      const { data, error: err } = await supabase
+        .from("game_rooms")
+        .insert({ game_type: "checkers", status: "waiting", state: createCheckersState(), rules })
+        .select("id")
+        .single();
+      setCreating(false);
+      if (err || !data) {
+        setShowCheckersSettings(false);
+        setError("방을 만들지 못했습니다. Supabase 마이그레이션/설정을 확인해 주세요.");
+        return;
+      }
+      router.push(`/room/${data.id}`);
+    },
+    [router],
+  );
+
   const signIn = useCallback(() => {
     const supabase = getSupabase();
     if (!supabase) return;
@@ -254,7 +280,7 @@ export default function LobbyPage() {
       {/* 히어로 */}
       <section className="mt-16 text-center">
         <h1 className="text-4xl font-bold leading-tight tracking-tight sm:text-5xl">
-          오목 · 윷놀이 · 바둑 · 오셀로 · 사목 · 카드 뒤집기
+          오목 · 윷놀이 · 바둑 · 오셀로 · 사목 · 카드 뒤집기 · 체커
         </h1>
         <p className="mx-auto mt-4 max-w-md text-ink-soft">
           멀리 있는 친구와, 가입 없이 링크 하나로.
@@ -268,7 +294,7 @@ export default function LobbyPage() {
               disabled={creating}
               className="rounded-md bg-ink px-8 py-3.5 text-lg text-paper shadow-lg transition hover:bg-ink-soft disabled:opacity-50"
             >
-              오목 시작하기
+              오목
             </button>
             {supabaseEnabled && (
               <button
@@ -276,7 +302,7 @@ export default function LobbyPage() {
                 disabled={creating}
                 className="rounded-md bg-vermil px-8 py-3.5 text-lg text-paper shadow-lg transition hover:opacity-85 disabled:opacity-50"
               >
-                윷놀이 시작하기
+                윷놀이
                 <span className="ml-1.5 font-plex text-xs opacity-80">2~4인</span>
               </button>
             )}
@@ -286,7 +312,7 @@ export default function LobbyPage() {
                 disabled={creating}
                 className="rounded-md border border-ink px-8 py-3.5 text-lg text-ink shadow-lg transition hover:bg-paper-deep disabled:opacity-50"
               >
-                바둑 시작하기
+                바둑
               </button>
             )}
             {supabaseEnabled && (
@@ -295,7 +321,7 @@ export default function LobbyPage() {
                 disabled={creating}
                 className="rounded-md border border-vermil px-8 py-3.5 text-lg text-vermil shadow-lg transition hover:bg-paper-deep disabled:opacity-50"
               >
-                오셀로 시작하기
+                오셀로
               </button>
             )}
             {supabaseEnabled && (
@@ -304,7 +330,7 @@ export default function LobbyPage() {
                 disabled={creating}
                 className="rounded-md border border-mud/50 px-8 py-3.5 text-lg text-ink-soft shadow-lg transition hover:bg-paper-deep disabled:opacity-50"
               >
-                사목 시작하기
+                사목
               </button>
             )}
             {supabaseEnabled && (
@@ -313,16 +339,19 @@ export default function LobbyPage() {
                 disabled={creating}
                 className="rounded-md bg-ink-soft px-8 py-3.5 text-lg text-paper shadow-lg transition hover:opacity-85 disabled:opacity-50"
               >
-                카드 뒤집기 시작하기
+                카드 뒤집기
+              </button>
+            )}
+            {supabaseEnabled && (
+              <button
+                onClick={() => setShowCheckersSettings(true)}
+                disabled={creating}
+                className="rounded-md border border-ink-soft px-8 py-3.5 text-lg text-ink-soft shadow-lg transition hover:bg-paper-deep disabled:opacity-50"
+              >
+                체커
               </button>
             )}
           </div>
-          <button
-            onClick={() => router.push("/room/local")}
-            className="font-plex text-xs text-mud underline-offset-4 transition hover:text-ink hover:underline"
-          >
-            같은 화면에서 둘이 두기
-          </button>
           {!supabaseEnabled && (
             <p className="mt-2 max-w-sm font-plex text-xs leading-relaxed text-vermil">
               Supabase가 아직 설정되지 않아 실시간 대전은 비활성 상태입니다. 같은 화면
@@ -332,6 +361,11 @@ export default function LobbyPage() {
           {error && <p className="font-plex text-xs text-vermil">{error}</p>}
         </div>
       </section>
+
+      {/* 광고 */}
+      <div className="mt-12">
+        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
+      </div>
 
       {/* 기록 */}
       <section className="mt-16">
@@ -351,8 +385,11 @@ export default function LobbyPage() {
         <HistoryList records={records} />
       </section>
 
-      <footer className="mt-auto pt-12 text-center font-plex text-[10px] uppercase tracking-widest text-mud">
-        omok online — a quiet board for two
+      <footer className="mt-auto flex flex-col items-center gap-2 pt-12 text-center font-plex text-[10px] uppercase tracking-widest text-mud">
+        <span>omok online — a quiet board for two</span>
+        <Link href="/privacy" className="normal-case tracking-normal underline-offset-4 hover:text-ink hover:underline">
+          개인정보처리방침
+        </Link>
       </footer>
 
       <RoomSettingsModal
@@ -390,6 +427,12 @@ export default function LobbyPage() {
         creating={creating}
         onCreate={createMemoryRoom}
         onClose={() => setShowMemorySettings(false)}
+      />
+      <CheckersSettingsModal
+        open={showCheckersSettings}
+        creating={creating}
+        onCreate={createCheckersRoom}
+        onClose={() => setShowCheckersSettings(false)}
       />
     </main>
   );

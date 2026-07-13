@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { DEFAULT_YUT_RULES, type YutRules } from "@/games/yut/logic";
 
 interface Props {
@@ -69,6 +70,12 @@ export default function YutSettingsModal({ open, creating, onCreate, onClose }: 
           >
             취소
           </button>
+          <Link
+            href="/room/local/yut"
+            className="flex-1 rounded border border-mud/40 px-4 py-2.5 text-center text-sm text-ink-soft transition hover:border-ink"
+          >
+            같은 화면
+          </Link>
           <button
             onClick={() => onCreate({ pieceCount, backdo })}
             disabled={creating}

@@ -9,6 +9,7 @@ import {
   type Point,
   type StoneColor,
 } from "@/games/omok/logic";
+import { useBoardKeyboardNav } from "@/lib/useBoardKeyboardNav";
 import { useCoarsePointer } from "@/lib/useCoarsePointer";
 
 const PAD = 30;
@@ -36,6 +37,13 @@ export default function Board({ board, lastMove, winLine, previewColor, onPlace 
   const winSet = new Set((winLine ?? []).map((p) => idx(p.x, p.y)));
   const interactive = Boolean(previewColor && onPlace);
   const preview = coarse ? selected : hover;
+  const nav = useBoardKeyboardNav({
+    cols: SIZE,
+    rows: SIZE,
+    interactive,
+    canPlace: (x, y) => board[idx(x, y)] === null,
+    onPlace: (x, y) => onPlace?.(x, y),
+  });
 
   // 착수 가능 여부가 바뀌거나(내 차례가 아니게 됨) 판이 바뀌면(수가 두어짐) 대기 중인 선택을 지운다
   const [prevBoard, setPrevBoard] = useState(board);
@@ -50,10 +58,12 @@ export default function Board({ board, lastMove, winLine, previewColor, onPlace 
     <>
       <svg
         viewBox={`0 0 ${W} ${W}`}
-        className="w-full max-w-[590px] select-none rounded-lg shadow-[0_10px_30px_rgba(26,22,20,0.25)]"
+        className="w-full max-w-[590px] select-none rounded-lg shadow-[0_10px_30px_rgba(26,22,20,0.25)] focus:outline-none focus-visible:ring-2 focus-visible:ring-vermil"
         onMouseLeave={() => setHover(null)}
+        onKeyDown={nav.onKeyDown}
+        tabIndex={interactive ? 0 : -1}
         role="img"
-        aria-label="오목판"
+        aria-label="오목판 — 화살표 키로 이동, Enter 또는 Space로 착수"
       >
         <defs>
           <linearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
@@ -133,6 +143,18 @@ export default function Board({ board, lastMove, winLine, previewColor, onPlace 
           />
         )}
 
+        {/* 키보드 커서 */}
+        {interactive && nav.cursor && (
+          <rect
+            x={px(nav.cursor.x) - GAP / 2 + 3} y={px(nav.cursor.y) - GAP / 2 + 3}
+            width={GAP - 6} height={GAP - 6}
+            rx="4"
+            fill="none" stroke="var(--color-vermil)" strokeWidth="2"
+            strokeDasharray="4 3"
+            pointerEvents="none"
+          />
+        )}
+
         {/* 클릭/호버/탭 히트 영역 */}
         {interactive &&
           Array.from({ length: SIZE * SIZE }, (_, i) => {
@@ -158,6 +180,12 @@ export default function Board({ board, lastMove, winLine, previewColor, onPlace 
             );
           })}
       </svg>
+
+      {!coarse && interactive && (
+        <p className="mt-1.5 font-plex text-[10px] text-mud">
+          키보드: 방향키 이동 · Enter/Space 착수
+        </p>
+      )}
 
       {coarse && interactive && selected && (
         <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center gap-2 border-t border-mud/30 bg-paper/95 p-3 shadow-[0_-4px_16px_rgba(26,22,20,0.15)] backdrop-blur">

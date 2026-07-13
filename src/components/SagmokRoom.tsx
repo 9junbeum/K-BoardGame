@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import DisconnectBanner from "@/components/DisconnectBanner";
+import KakaoAdFit from "@/components/KakaoAdFit";
 import NicknameModal from "@/components/NicknameModal";
+import RulesModal from "@/components/RulesModal";
 import SagmokBoard from "@/components/SagmokBoard";
 import {
   applyDrop,
@@ -22,6 +24,8 @@ import { saveLocalRecord, saveServerRecord } from "@/lib/history";
 import { getPlayerId, getStoredNickname, storeNickname } from "@/lib/player";
 import { usePresence } from "@/lib/presence";
 import { getSupabase, type PlayerRow } from "@/lib/supabase";
+import { useRulesModal } from "@/lib/useRulesModal";
+import { useTurnNotification } from "@/lib/useTurnNotification";
 
 const COLOR_LABEL = { b: "흑", w: "백" } as const;
 
@@ -61,6 +65,7 @@ export default function SagmokRoom({ roomId }: { roomId: string }) {
   const [notFound, setNotFound] = useState(false);
   const [copied, setCopied] = useState(false);
   const savedRef = useRef<string | null>(null);
+  const rulesModal = useRulesModal("sagmok");
 
   const [prevRoomId, setPrevRoomId] = useState(roomId);
   if (prevRoomId !== roomId) {
@@ -150,6 +155,8 @@ export default function SagmokRoom({ roomId }: { roomId: string }) {
     Boolean(me) &&
     online.has(myId) &&
     Boolean(opponent && !online.has(opponent.player_id));
+
+  useTurnNotification(Boolean(room && room.status === "playing" && room.current_turn === myId));
 
   const forceForfeit = useCallback(async () => {
     if (!supabase || !room || !me) return;
@@ -469,6 +476,12 @@ export default function SagmokRoom({ roomId }: { roomId: string }) {
             {COLS}×{ROWS} · 4목
           </span>
           <button
+            onClick={rulesModal.reopen}
+            className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
+          >
+            규칙 보기
+          </button>
+          <button
             onClick={copyLink}
             className="rounded border border-mud/40 px-3 py-1.5 font-plex text-xs text-ink-soft transition hover:border-ink"
           >
@@ -687,12 +700,17 @@ export default function SagmokRoom({ roomId }: { roomId: string }) {
         )}
       </div>
 
+      <div className="mt-8 w-full">
+        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
+      </div>
+
       <NicknameModal
         open={needJoin}
         defaultValue={typeof window !== "undefined" ? getStoredNickname() : ""}
         title={players.length === 0 ? "사목 방을 만들었습니다 — 닉네임 입력" : "대국에 참가합니다 — 닉네임 입력"}
         onSubmit={join}
       />
+      <RulesModal open={rulesModal.open} gameType="sagmok" onClose={rulesModal.close} />
     </Shell>
   );
 }

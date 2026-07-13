@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { DEFAULT_OTHELLO_RULES, type OthelloRules } from "@/games/othello/logic";
 import type { FirstMove } from "@/games/omok/logic";
 
@@ -59,6 +60,12 @@ export default function OthelloSettingsModal({ open, creating, onCreate, onClose
           >
             취소
           </button>
+          <Link
+            href="/room/local/othello"
+            className="flex-1 rounded border border-mud/40 px-4 py-2.5 text-center text-sm text-ink-soft transition hover:border-ink"
+          >
+            같은 화면
+          </Link>
           <button
             onClick={() => onCreate({ firstMove })}
             disabled={creating}

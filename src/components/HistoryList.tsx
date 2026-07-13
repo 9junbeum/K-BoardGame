@@ -42,6 +42,7 @@ export default function HistoryList({ records }: { records: GameRecord[] }) {
               : r.gameType === "othello" ? "오셀로"
               : r.gameType === "sagmok" ? "사목"
               : r.gameType === "memory" ? "카드 뒤집기"
+              : r.gameType === "checkers" ? "체커"
               : "오목"}
           </span>
         </li>

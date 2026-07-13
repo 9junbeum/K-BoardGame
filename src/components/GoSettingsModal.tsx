@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { DEFAULT_GO_RULES, type BoardSize, type GoRules } from "@/games/go/logic";
 import type { FirstMove } from "@/games/omok/logic";
 
@@ -103,6 +104,12 @@ export default function GoSettingsModal({ open, creating, onCreate, onClose }: P
           >
             취소
           </button>
+          <Link
+            href="/room/local/go"
+            className="flex-1 rounded border border-mud/40 px-4 py-2.5 text-center text-sm text-ink-soft transition hover:border-ink"
+          >
+            같은 화면
+          </Link>
           <button
             onClick={() => onCreate({ boardSize, komi, firstMove })}
             disabled={creating}
