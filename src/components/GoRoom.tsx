@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import ChatWidget from "@/components/ChatWidget";
 import DisconnectBanner from "@/components/DisconnectBanner";
 import GoBoard from "@/components/GoBoard";
 import KakaoAdFit from "@/components/KakaoAdFit";
@@ -849,6 +850,8 @@ export default function GoRoom({ roomId }: { roomId: string }) {
       <div className="mt-8 w-full">
         <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
       </div>
+
+      <ChatWidget roomId={roomId} myId={myId} nickname={me?.nickname ?? null} />
 
       <NicknameModal
         open={needJoin}
