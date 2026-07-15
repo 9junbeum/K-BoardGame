@@ -10,11 +10,13 @@ interface ChatWidgetProps {
   myId: string;
   /** 참가(닉네임 입력)를 마치기 전에는 채팅을 아예 보여주지 않는다 */
   nickname: string | null;
+  /** 내가 메시지를 보낸 직후 호출 — 캐치마인드 정답 판정 등에 사용 */
+  onSent?: (text: string) => void;
 }
 
 const DESKTOP_WIDTH = 320;
 
-export default function ChatWidget({ roomId, myId, nickname }: ChatWidgetProps) {
+export default function ChatWidget({ roomId, myId, nickname, onSent }: ChatWidgetProps) {
   const { messages, send } = useChat(roomId, myId, nickname);
   const isDesktop = useIsDesktop();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -55,6 +57,7 @@ export default function ChatWidget({ roomId, myId, nickname }: ChatWidgetProps) 
     const text = input.trim();
     if (!text) return;
     send(text);
+    onSent?.(text);
     setInput("");
   };
 

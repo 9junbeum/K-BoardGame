@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 export const metadata = {
-  title: "개인정보처리방침 — 오목 온라인",
+  title: "개인정보처리방침 — KBG",
 };
 
 export default function PrivacyPage() {
@@ -24,7 +24,7 @@ export default function PrivacyPage() {
 
       <div className="prose-section mt-8 space-y-8 text-sm leading-relaxed text-ink-soft">
         <Section title="1. 수집하는 개인정보 항목">
-          <p>오목 온라인(이하 &ldquo;서비스&rdquo;)은 다음과 같은 정보를 수집합니다.</p>
+          <p>KBG(이하 &ldquo;서비스&rdquo;)는 다음과 같은 정보를 수집합니다.</p>
           <ul className="mt-2 list-disc space-y-1.5 pl-5">
             <li>
               <strong className="text-ink">익명 이용자</strong> — 별도의 개인정보를 수집하지 않습니다.

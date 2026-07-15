@@ -6,7 +6,7 @@ export type GameResult = "win" | "lose" | "draw";
 export interface GameRecord {
   id: string;
   roomId: string | null;
-  gameType: "omok" | "yut" | "go" | "othello" | "sagmok" | "memory" | "checkers";
+  gameType: "omok" | "yut" | "go" | "othello" | "sagmok" | "memory" | "checkers" | "catchmind";
   result: GameResult;
   opponentNickname: string;
   /** 게임별 착수 기록 — 표시용으로 길이만 사용하므로 게임마다 다른 모양을 허용한다 */
@@ -72,7 +72,16 @@ export async function loadServerHistory(
   return (data ?? []).map((r) => ({
     id: r.id as string,
     roomId: r.room_id as string | null,
-    gameType: (r.game_type as "omok" | "yut" | "go" | "othello" | "sagmok" | "memory" | "checkers") ?? "omok",
+    gameType:
+      (r.game_type as
+        | "omok"
+        | "yut"
+        | "go"
+        | "othello"
+        | "sagmok"
+        | "memory"
+        | "checkers"
+        | "catchmind") ?? "omok",
     result: r.result as GameResult,
     opponentNickname: (r.opponent_nickname as string) ?? "?",
     moves: r.moves as unknown[] | null,

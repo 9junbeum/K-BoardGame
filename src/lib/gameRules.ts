@@ -1,4 +1,12 @@
-export type GameType = "omok" | "yut" | "go" | "othello" | "sagmok" | "memory" | "checkers";
+export type GameType =
+  | "omok"
+  | "yut"
+  | "go"
+  | "othello"
+  | "sagmok"
+  | "memory"
+  | "checkers"
+  | "catchmind";
 
 export interface GameRuleInfo {
   title: string;
@@ -63,6 +71,17 @@ export const GAME_RULES: Record<GameType, GameRuleInfo> = {
       "짝이 틀리면 두 장 다시 덮이고 상대에게 차례가 넘어갑니다.",
       "카드 한 장을 고르는 데 제한 시간이 있으며, 시간 안에 고르지 못하면 그대로 차례가 넘어갑니다.",
       "모든 짝이 확정되면 대국이 끝나고, 더 많은 짝을 맞춘 쪽이 승리합니다(동률이면 무승부).",
+    ],
+  },
+  catchmind: {
+    title: "캐치마인드 규칙",
+    rules: [
+      "2~4명이 함께합니다. 차례가 된 사람이 제시어를 보고 제한시간(최대 1분) 안에 그림을 그립니다.",
+      "나머지 사람들은 그림을 보고 채팅으로 정답을 입력합니다. 글자 수 힌트가 표시됩니다.",
+      "정답을 맞히면 1점을 얻고, 맞힌 사람이 다음 출제자가 됩니다.",
+      "시간 안에 아무도 못 맞히면 점수 없이 다음 사람에게 차례가 넘어갑니다.",
+      "그리는 사람은 붓 크기·색상·채우기·지우개를 쓸 수 있지만, 글자나 숫자를 쓰면 안 됩니다!",
+      "목표 점수에 먼저 도달한 사람이 승리합니다.",
     ],
   },
   checkers: {

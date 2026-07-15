@@ -1,0 +1,30 @@
+{
+  "name": "KBG — 링크 하나로 어디서든 친구와 보드게임!",
+  "short_name": "KBG",
+  "description": "링크 하나로 어디서든 친구와 보드게임!",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4ede0",
+  "theme_color": "#1a1614",
+  "lang": "ko",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

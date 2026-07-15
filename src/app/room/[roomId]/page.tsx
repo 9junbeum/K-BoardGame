@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import CatchmindRoom from "@/components/CatchmindRoom";
 import CheckersRoom from "@/components/CheckersRoom";
 import GoRoom from "@/components/GoRoom";
 import MemoryRoom from "@/components/MemoryRoom";
@@ -84,6 +85,7 @@ export default function RoomPage() {
   if (gameType === "sagmok") return <SagmokRoom roomId={roomId} />;
   if (gameType === "memory") return <MemoryRoom roomId={roomId} />;
   if (gameType === "checkers") return <CheckersRoom roomId={roomId} />;
+  if (gameType === "catchmind") return <CatchmindRoom roomId={roomId} />;
   return <OmokRoom roomId={roomId} />;
 }
 

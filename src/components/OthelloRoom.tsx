@@ -469,6 +469,10 @@ export default function OthelloRoom({ roomId }: { roomId: string }) {
 
   return (
     <Shell>
+      <div className="mb-4 w-full">
+        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
+      </div>
+
       <header className="mb-4 flex w-full items-center justify-between">
         <Link
           href="/"
@@ -705,10 +709,6 @@ export default function OthelloRoom({ roomId }: { roomId: string }) {
             )}
           </div>
         )}
-      </div>
-
-      <div className="mt-8 w-full">
-        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
       </div>
 
       <ChatWidget roomId={roomId} myId={myId} nickname={me?.nickname ?? null} />

@@ -2,8 +2,25 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "오목 온라인 — 친구와 링크로 함께",
-  description: "가입 없이 링크 하나로 친구와 오목을 두는 곳.",
+  title: "KBG — 링크 하나로 어디서든 친구와 보드게임!",
+  description: "링크 하나로 어디서든 친구와 보드게임!",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "KBG",
+  },
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/icons/apple-touch-icon.png",
+  },
+};
+
+export const viewport = {
+  themeColor: "#1a1614",
 };
 
 export default function RootLayout({

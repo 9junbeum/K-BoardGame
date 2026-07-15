@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 네이티브 앱(Capacitor) 프로젝트 — 생성/빌드 산출물이라 린트 대상 아님
+    "android/**",
+    "ios/**",
+    "capacitor-www/**",
   ]),
 ]);
 

@@ -216,6 +216,10 @@ export default function LocalYutRoomPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-4xl flex-col items-center px-4 py-6">
+      <div className="mb-4 w-full">
+        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
+      </div>
+
       <header className="mb-4 flex w-full items-center justify-between">
         <Link
           href="/"
@@ -476,10 +480,6 @@ export default function LocalYutRoomPage() {
       <p className="mt-6 font-plex text-xs text-mud">
         한 화면에서 플레이어 1과 플레이어 2가 번갈아 윷을 던집니다.
       </p>
-
-      <div className="mt-8 w-full max-w-2xl">
-        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
-      </div>
 
       <RulesModal open={rulesModal.open} gameType="yut" onClose={rulesModal.close} />
     </main>

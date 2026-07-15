@@ -482,6 +482,10 @@ export default function YutRoom({ roomId }: { roomId: string }) {
 
   return (
     <Shell>
+      <div className="mb-4 w-full">
+        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
+      </div>
+
       <header className="mb-4 flex w-full items-center justify-between">
         <Link
           href="/"
@@ -830,10 +834,6 @@ export default function YutRoom({ roomId }: { roomId: string }) {
             ○ 대기 · ● 판 위 · 흐림 완주 — 내 차례엔 대기 말을 클릭해 새 말 투입
           </p>
         </aside>
-      </div>
-
-      <div className="mt-8 w-full">
-        <KakaoAdFit adUnit="DAN-DXVo1uxzwvIXqjLT" width={320} height={100} />
       </div>
 
       <ChatWidget roomId={roomId} myId={myId} nickname={me?.nickname ?? null} />
